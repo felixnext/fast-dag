@@ -31,3 +31,18 @@ Run type checking:
 ```bash
 uv run mypy fast-dag
 ```
+
+
+initial release:
+- both require to gen an API token from pypi
+
+```
+uv run python -m build
+uv run twine check dist/*
+
+# test first
+uv run twine upload --repository testpypi dist/*
+
+# upload real
+uv run twine upload dist/*
+```

@@ -3,4 +3,4 @@
 Copyright (c) 2025 Felix Geilert
 """
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"

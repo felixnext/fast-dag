@@ -2,13 +2,23 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .core.context import Context
-from .core.exceptions import ExecutionError, InvalidNodeError, ValidationError
+from .core.exceptions import (
+    CycleError,
+    DisconnectedNodeError,
+    ExecutionError,
+    InvalidNodeError,
+    MissingConnectionError,
+    ValidationError,
+)
 from .core.node import Node
 from .core.types import ConditionalReturn, NodeType
-from .core.validation import find_cycles, find_disconnected_nodes
+from .core.validation import find_cycles, find_disconnected_nodes, find_entry_points
+
+if TYPE_CHECKING:
+    from .runner import DAGRunner
 
 
 @dataclass
@@ -31,6 +41,7 @@ class DAG:
 
     # Runtime state
     context: Context | None = None
+    _runner: Any = None  # Lazy-loaded DAGRunner
 
     def node(
         self,
@@ -40,6 +51,8 @@ class DAG:
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
         description: str | None = None,
+        retry: int | None = None,
+        timeout: float | None = None,
     ) -> Callable:
         """Decorator to add a function as a node in the DAG.
 
@@ -54,6 +67,8 @@ class DAG:
                 outputs=outputs,
                 description=description,
                 node_type=NodeType.STANDARD,
+                retry=retry,
+                timeout=timeout,
             )
             self.add_node(node)
             return node
@@ -119,6 +134,14 @@ class DAG:
 
         if node.name in self.nodes:
             raise ValueError(f"Node with name '{node.name}' already exists")
+
+        # Validate node immediately
+        node_errors = node.validate()
+        if node_errors:
+            raise ValidationError(
+                f"Invalid node '{node.name}':\n"
+                + "\n".join(f"  - {error}" for error in node_errors)
+            )
 
         self.nodes[node.name] = node
         self._invalidate_cache()
@@ -186,20 +209,40 @@ class DAG:
 
         # Check that all required inputs have connections
         # Entry nodes (with no input connections) are allowed to have unconnected inputs
-        from .core.validation import find_entry_points
+        # Note: Non-entry nodes can also receive some inputs from kwargs (parameters)
+        # so we don't require ALL inputs to have connections
 
-        entry_points = set(find_entry_points(self.nodes))
-
+        # Check for missing required connections
+        entry_nodes = find_entry_points(self.nodes)
         for node_name, node_obj in self.nodes.items():
-            # Skip entry nodes - their inputs come from external sources
-            if node_name in entry_points:
-                continue
+            if node_name not in entry_nodes and node_obj.inputs:
+                # Non-entry nodes should have connections for their inputs
+                for input_name in node_obj.inputs:
+                    if input_name not in node_obj.input_connections:
+                        # This input has no connection - might be OK if provided via kwargs
+                        # but we should warn about it
+                        errors.append(
+                            f"Node '{node_name}' missing connection for input '{input_name}'"
+                        )
 
-            for input_name in node_obj.inputs or []:
-                if input_name not in node_obj.input_connections:
-                    errors.append(
-                        f"Node '{node_name}': input '{input_name}' has no connection"
-                    )
+        # Check for multiple connections to the same input port
+        # NOTE: This is currently disabled as it breaks legitimate use cases
+        # where multiple nodes connect to the same input (OR semantics)
+        # This needs more thought on how to handle properly
+        # input_connections_count: dict[tuple[str, str], int] = {}
+        # for node_name, node_obj in self.nodes.items():
+        #     for output_name, connections in node_obj.output_connections.items():
+        #         for target_node, input_name in connections:
+        #             key = (target_node.name if target_node.name else "", input_name)
+        #             input_connections_count[key] = input_connections_count.get(key, 0) + 1
+        #
+        # # Report any inputs with multiple connections
+        # for (node_name, input_name), count in input_connections_count.items():
+        #     if count > 1:
+        #         errors.append(
+        #             f"Node '{node_name}' input '{input_name}' has multiple connections ({count}). "
+        #             "Only one connection per input is allowed."
+        #         )
 
         # Check conditional nodes have both branches connected
         for node_name, node_obj in self.nodes.items():
@@ -234,6 +277,17 @@ class DAG:
             check_types=check_types,
         )
         if errors:
+            # Check for specific error types and raise appropriate exceptions
+            for error in errors:
+                error_lower = error.lower()
+                if "cycle" in error_lower:
+                    raise CycleError(error)
+                elif "disconnected" in error_lower:
+                    raise DisconnectedNodeError(error)
+                elif "missing" in error_lower and "connection" in error_lower:
+                    raise MissingConnectionError(error)
+
+            # If no specific error type matched, raise generic ValidationError
             raise ValidationError(
                 f"DAG validation failed with {len(errors)} errors:\n"
                 + "\n".join(f"  - {error}" for error in errors)
@@ -313,6 +367,15 @@ class DAG:
         # Validate DAG before execution
         errors = self.validate(allow_disconnected=True)
         if errors:
+            # Check for specific error types
+            for error in errors:
+                error_lower = error.lower()
+                if "cycle" in error_lower:
+                    raise CycleError(f"Cannot execute DAG with cycles: {error}")
+                elif "missing connection" in error_lower:
+                    raise MissingConnectionError(
+                        f"Cannot execute DAG with missing connections: {error}"
+                    )
             raise ValidationError(f"Cannot execute invalid DAG: {errors}")
 
         # Get execution order
@@ -344,8 +407,18 @@ class DAG:
                                 f"Entry node '{node_name}' missing required input: '{input_name}'"
                             )
             else:
-                # Non-entry node - get inputs from connections
+                # Non-entry node - get inputs from connections and kwargs
                 skip_node = False
+
+                # First, check for any inputs that might come from kwargs
+                for input_name in node.inputs or []:
+                    if (
+                        input_name in kwargs
+                        and input_name not in node.input_connections
+                    ):
+                        node_inputs[input_name] = kwargs[input_name]
+
+                # Then get inputs from connections
                 for input_name, (
                     source_node,
                     output_name,
@@ -354,6 +427,10 @@ class DAG:
                     if source_name is None:
                         raise ExecutionError("Source node has no name")
                     if source_name not in self.context:
+                        if error_strategy == "continue":
+                            # Skip this node if its dependency failed
+                            skip_node = True
+                            break
                         raise ExecutionError(
                             f"Node '{node_name}' requires result from '{source_name}' which hasn't executed"
                         )
@@ -398,6 +475,9 @@ class DAG:
 
             except Exception as e:
                 if error_strategy == "stop":
+                    # Re-raise common exceptions as-is to preserve type
+                    if isinstance(e, RuntimeError | ValueError | TypeError | KeyError):
+                        raise
                     raise ExecutionError(
                         f"Error executing node '{node_name}': {e}"
                     ) from e
@@ -414,15 +494,36 @@ class DAG:
     async def run_async(
         self,
         context: Context | None = None,
+        mode: str = "sequential",  # noqa: ARG002
+        error_strategy: str = "stop",  # noqa: ARG002
         **kwargs: Any,
     ) -> Any:
-        """Execute the DAG asynchronously."""
+        """Execute the DAG asynchronously.
+
+        Args:
+            context: Execution context (created if not provided)
+            mode: Execution mode (only sequential supported for async)
+            error_strategy: How to handle errors (stop, continue, retry)
+            **kwargs: Input values for entry nodes
+
+        Returns:
+            The result from the final node(s)
+        """
         # Initialize context
         self.context = context or Context()
 
         # Validate DAG before execution
         errors = self.validate(allow_disconnected=True)
         if errors:
+            # Check for specific error types
+            for error in errors:
+                error_lower = error.lower()
+                if "cycle" in error_lower:
+                    raise CycleError(f"Cannot execute DAG with cycles: {error}")
+                elif "missing connection" in error_lower:
+                    raise MissingConnectionError(
+                        f"Cannot execute DAG with missing connections: {error}"
+                    )
             raise ValidationError(f"Cannot execute invalid DAG: {errors}")
 
         # Get execution order
@@ -454,8 +555,18 @@ class DAG:
                                 f"Entry node '{node_name}' missing required input: '{input_name}'"
                             )
             else:
-                # Non-entry node - get inputs from connections
+                # Non-entry node - get inputs from connections and kwargs
                 skip_node = False
+
+                # First, check for any inputs that might come from kwargs
+                for input_name in node.inputs or []:
+                    if (
+                        input_name in kwargs
+                        and input_name not in node.input_connections
+                    ):
+                        node_inputs[input_name] = kwargs[input_name]
+
+                # Then get inputs from connections
                 for input_name, (
                     source_node,
                     output_name,
@@ -464,6 +575,10 @@ class DAG:
                     if source_name is None:
                         raise ExecutionError("Source node has no name")
                     if source_name not in self.context:
+                        if error_strategy == "continue":
+                            # Skip this node if its dependency failed
+                            skip_node = True
+                            break
                         raise ExecutionError(
                             f"Node '{node_name}' requires result from '{source_name}' which hasn't executed"
                         )
@@ -494,14 +609,30 @@ class DAG:
                     continue  # Skip to next node
 
             # Execute the node
-            if node.is_async:
-                result = await node.execute_async(node_inputs, context=self.context)
-            else:
-                result = node.execute(node_inputs, context=self.context)
+            try:
+                if node.is_async:
+                    result = await node.execute_async(node_inputs, context=self.context)
+                else:
+                    result = node.execute(node_inputs, context=self.context)
 
-            # Store result in context
-            self.context.set_result(node_name, result)
-            last_result = result
+                # Store result in context
+                self.context.set_result(node_name, result)
+                last_result = result
+
+            except Exception as e:
+                if error_strategy == "stop":
+                    # Re-raise common exceptions as-is to preserve type
+                    if isinstance(e, RuntimeError | ValueError | TypeError | KeyError):
+                        raise
+                    raise ExecutionError(
+                        f"Error executing node '{node_name}': {e}"
+                    ) from e
+                elif error_strategy == "continue":
+                    # Log error and continue
+                    self.context.metadata[f"{node_name}_error"] = str(e)
+                    continue
+                else:
+                    raise ValueError(f"Unknown error strategy: {error_strategy}") from e
 
         # Return the last result
         return last_result
@@ -530,3 +661,159 @@ class DAG:
         if self.context is None:
             return {}
         return self.context.results
+
+    def step(
+        self, context: Context | None = None, **kwargs: Any
+    ) -> tuple[Context, Any]:
+        """Execute a single step of the DAG.
+
+        This executes the next available node in topological order
+        that has all its dependencies satisfied.
+
+        Args:
+            context: Current execution context (created if not provided)
+            **kwargs: Input values for entry nodes
+
+        Returns:
+            Tuple of (updated_context, step_result)
+            Returns (context, None) when no more nodes can be executed
+        """
+        # Initialize or use provided context
+        if context is None:
+            context = Context()
+        self.context = context
+
+        # Validate DAG before execution
+        errors = self.validate(allow_disconnected=True)
+        if errors:
+            # Check for specific error types
+            for error in errors:
+                error_lower = error.lower()
+                if "cycle" in error_lower:
+                    raise CycleError(f"Cannot execute DAG with cycles: {error}")
+                elif "missing connection" in error_lower:
+                    raise MissingConnectionError(
+                        f"Cannot execute DAG with missing connections: {error}"
+                    )
+            raise ValidationError(f"Cannot execute invalid DAG: {errors}")
+
+        # Get execution order
+        exec_order = self.execution_order
+
+        # Find entry nodes
+        entry_nodes = self.entry_points
+
+        # Find next node to execute
+        for node_name in exec_order:
+            # Skip if already executed
+            if node_name in context.results:
+                continue
+
+            node = self.nodes[node_name]
+
+            # Check if all dependencies are satisfied
+            can_execute = True
+            skip_node = False
+
+            if node_name in entry_nodes:
+                # Entry node - can always execute if not done yet
+                pass
+            else:
+                # Check input connections
+                for _input_name, (
+                    source_node,
+                    output_name,
+                ) in node.input_connections.items():
+                    source_name = source_node.name
+                    if source_name is None:
+                        raise ExecutionError("Source node has no name")
+
+                    if source_name not in context:
+                        # Dependency not satisfied
+                        can_execute = False
+                        break
+
+                    # Check for conditional branches
+                    source_result = context.get(source_name)
+                    if (
+                        source_result
+                        and isinstance(source_result, ConditionalReturn)
+                        and (
+                            output_name == "true"
+                            and not source_result.condition
+                            or output_name == "false"
+                            and source_result.condition
+                        )
+                    ):
+                        # Wrong branch - skip this node
+                        skip_node = True
+                        break
+
+            if skip_node:
+                # Mark as skipped
+                context.set_result(node_name, None)
+                continue
+
+            if not can_execute:
+                # Dependencies not ready
+                continue
+
+            # Execute this node
+            node_inputs = {}
+
+            if node_name in entry_nodes:
+                # Entry node - get inputs from kwargs
+                for input_name in node.inputs or []:
+                    if input_name in kwargs:
+                        node_inputs[input_name] = kwargs[input_name]
+                    elif input_name == "context":
+                        continue
+                    else:
+                        if node.inputs:
+                            raise ValueError(
+                                f"Entry node '{node_name}' missing required input: '{input_name}'"
+                            )
+            else:
+                # Get inputs from connections
+                for input_name, (
+                    source_node,
+                    output_name,
+                ) in node.input_connections.items():
+                    source_name = source_node.name
+                    if source_name is None:
+                        raise ExecutionError("Source node has no name")
+                    source_result = context[source_name]
+
+                    # Handle output selection
+                    if isinstance(source_result, dict) and output_name in source_result:
+                        node_inputs[input_name] = source_result[output_name]
+                    elif isinstance(source_result, ConditionalReturn):
+                        node_inputs[input_name] = source_result.value
+                    else:
+                        node_inputs[input_name] = source_result
+
+            # Execute the node
+            if node.is_async:
+                raise NotImplementedError(
+                    "Async execution not supported in sync step()"
+                )
+
+            result = node.execute(node_inputs, context=context)
+
+            # Store result
+            context.set_result(node_name, result)
+
+            # Return the result
+            return context, result
+
+        # No more nodes to execute
+        return context, None
+
+    @property
+    def runner(self) -> "DAGRunner":
+        """Get or create a runner for this DAG."""
+        if self._runner is None:
+            from .runner import DAGRunner
+
+            self._runner = DAGRunner(self)
+        return self._runner

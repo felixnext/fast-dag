@@ -229,11 +229,13 @@ class TestStepExecution:
 
         # Execute steps
         results = []
-        while not fsm.is_terminal_state(fsm.current_state) and context.cycle_count < 10:
+        while context.cycle_count < 10:
             context, result = fsm.step(context)
-            results.append(result)
+            if result is not None:
+                results.append(result)
 
-            if fsm.current_state == "end":
+            # Check if terminated after executing
+            if result is None and context.cycle_count > 0:
                 break
 
         assert results == ["loop_0", "loop_1", "loop_2", "done"]
@@ -424,7 +426,7 @@ class TestFSMValidation:
         def unreachable(context: FSMContext) -> FSMReturn:
             return FSMReturn(next_state="end")
 
-        errors = fsm.validate()
+        errors = fsm.validate(allow_disconnected=False)
         assert any("unreachable" in str(e).lower() for e in errors)
 
     def test_validate_valid_fsm(self):

@@ -255,7 +255,8 @@ class TestComplexBranchingExample:
         validate_order.on_true >> [check_inventory, calculate_pricing, check_fraud]
 
         # All three must complete before payment (AND node)
-        [check_inventory, calculate_pricing, check_fraud] >> process_payment
+        # Order matters! Connects to process_payment(pricing, fraud, inventory)
+        [calculate_pricing, check_fraud, check_inventory] >> process_payment
 
         # Invalid branch
         validate_order.on_false >> reject_order

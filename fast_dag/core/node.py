@@ -31,6 +31,8 @@ class Node:
     description: str | None = None
     node_type: NodeType = NodeType.STANDARD
     metadata: dict[str, Any] = field(default_factory=dict)
+    retry: int | None = None
+    timeout: float | None = None
 
     # Connection tracking
     # Maps input name to (source_node, output_name)
@@ -118,6 +120,14 @@ class Node:
         # Check that we have at least one output
         if not self.outputs:
             errors.append(f"Node '{self.name}': must have at least one output")
+
+        # Check for return annotation - but only warn, don't fail
+        # Many Python functions don't have return annotations
+        # sig = inspect.signature(self.func)
+        # if sig.return_annotation is inspect.Parameter.empty:
+        #     errors.append(
+        #         f"Node '{self.name}': function must have a return type annotation"
+        #     )
 
         # For conditional nodes, check specific outputs
         if (

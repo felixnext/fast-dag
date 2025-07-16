@@ -23,6 +23,9 @@ from .core import (
     ValidationError,
 )
 from .dag import DAG
+from .fsm import FSM
+from .registry import FunctionRegistry
+from .runner import DAGRunner, ExecutionMode
 
 __all__ = [
     "__version__",
@@ -34,6 +37,10 @@ __all__ = [
     "SelectReturn",
     "FSMReturn",
     "DAG",
+    "FSM",
+    "DAGRunner",
+    "ExecutionMode",
+    "FunctionRegistry",
     "FastDAGError",
     "ValidationError",
     "CycleError",

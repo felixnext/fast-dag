@@ -11,6 +11,7 @@ Demonstrates creating workflows without decorators:
 """
 
 import argparse
+from typing import Any
 
 from fast_dag import DAG, ConditionalReturn, Node, NodeType
 
@@ -167,21 +168,23 @@ def create_builder_dag() -> DAG:
         dag.add_node("fetch", fetch_data)
         .add_node("filter", filter_data)
         .add_node("aggregate", aggregate_results)
-        .add_node("check", quality_check, node_type=NodeType.CONDITIONAL)
+        .add_node(
+            Node(func=quality_check, name="check", node_type=NodeType.CONDITIONAL)
+        )
         .add_node("success", report_success)
         .add_node("failure", report_failure)
     )
 
     # Connect using method chaining and pipe operator
     # Method 1: Using connect_to
-    dag.get_node("fetch").connect_to(dag.get_node("filter"))
+    dag.nodes["fetch"].connect_to(dag.nodes["filter"])
 
     # Method 2: Using pipe operator
-    dag.get_node("filter") | dag.get_node("aggregate") | dag.get_node("check")
+    dag.nodes["filter"] | dag.nodes["aggregate"] | dag.nodes["check"]
 
     # Connect conditional outputs
-    dag.get_node("check").on_true.connect_to(dag.get_node("success"))
-    dag.get_node("check").on_false.connect_to(dag.get_node("failure"))
+    dag.nodes["check"].on_true.connect_to(dag.nodes["success"])
+    dag.nodes["check"].on_false.connect_to(dag.nodes["failure"])
 
     return dag
 
@@ -207,7 +210,7 @@ def create_registry_dag() -> DAG:
     dag = DAG("registry_workflow")
 
     # Define workflow structure
-    workflow_def = [
+    workflow_def: list[dict[str, Any]] = [
         {"name": "fetch", "func": "data_fetcher", "outputs": ["data"]},
         {"name": "filter", "func": "data_filter", "inputs": ["data", "threshold"]},
         {"name": "aggregate", "func": "aggregator"},
@@ -219,6 +222,8 @@ def create_registry_dag() -> DAG:
     # Create nodes from definitions
     for node_def in workflow_def:
         func = registry.get(node_def["func"])
+        if func is None:
+            raise ValueError(f"Function {node_def['func']} not found in registry")
         node_type = (
             NodeType.CONDITIONAL
             if node_def.get("type") == "conditional"

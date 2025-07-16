@@ -12,7 +12,7 @@ Demonstrates:
 import argparse
 import asyncio
 
-from fast_dag import DAG, ConditionalReturn, DAGContext, DAGRunner
+from fast_dag import DAG, ConditionalReturn, Context, DAGRunner
 
 
 def main():
@@ -205,7 +205,7 @@ def main():
         print(f"Processing order: {order_data['order_id']}")
         print(f"{'=' * 50}")
 
-        context = DAGContext()
+        context = Context()
         if args.mode == "sync":
             result = workflow.run(context=context, order_data=order_data)
         elif args.mode == "async":

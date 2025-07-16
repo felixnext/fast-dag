@@ -22,6 +22,7 @@ from .core import (
     TimeoutError,
     ValidationError,
 )
+from .dag import DAG
 
 __all__ = [
     "__version__",
@@ -32,6 +33,7 @@ __all__ = [
     "ConditionalReturn",
     "SelectReturn",
     "FSMReturn",
+    "DAG",
     "FastDAGError",
     "ValidationError",
     "CycleError",

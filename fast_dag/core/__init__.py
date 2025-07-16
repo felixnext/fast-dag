@@ -1,5 +1,6 @@
 """Core components of fast-dag."""
 
+from .connections import ConditionalOutputProxy, NodeList
 from .context import Context, FSMContext
 from .exceptions import (
     CycleError,
@@ -22,6 +23,8 @@ __all__ = [
     "ConditionalReturn",
     "SelectReturn",
     "FSMReturn",
+    "ConditionalOutputProxy",
+    "NodeList",
     "FastDAGError",
     "ValidationError",
     "CycleError",

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .connections import ConditionalOutputProxy
 from .introspection import (
     get_function_description,
     get_function_inputs,
@@ -32,8 +33,12 @@ class Node:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # Connection tracking
-    input_connections: dict[str, tuple[str, str]] = field(default_factory=dict)
-    output_connections: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
+    # Maps input name to (source_node, output_name)
+    input_connections: dict[str, tuple["Node", str]] = field(default_factory=dict)
+    # Maps output name to list of (target_node, input_name)
+    output_connections: dict[str, list[tuple["Node", str]]] = field(
+        default_factory=dict
+    )
 
     # Runtime properties
     _has_context: bool | None = None
@@ -85,6 +90,20 @@ class Node:
             self._is_async = is_async_function(self.func)
         return self._is_async
 
+    @property
+    def on_true(self) -> ConditionalOutputProxy:
+        """Get proxy for true branch connections (conditional nodes only)."""
+        if self.node_type != NodeType.CONDITIONAL:
+            raise AttributeError(f"Node '{self.name}' is not a conditional node")
+        return ConditionalOutputProxy(self, "true")
+
+    @property
+    def on_false(self) -> ConditionalOutputProxy:
+        """Get proxy for false branch connections (conditional nodes only)."""
+        if self.node_type != NodeType.CONDITIONAL:
+            raise AttributeError(f"Node '{self.name}' is not a conditional node")
+        return ConditionalOutputProxy(self, "false")
+
     def validate(self) -> list[str]:
         """Validate the node configuration.
 
@@ -129,12 +148,8 @@ class Node:
         if output not in self.output_connections:
             self.output_connections[output] = []
 
-        # Ensure both nodes have names
-        if self.name is None or target_node.name is None:
-            raise ValueError("Both nodes must have names to be connected")
-
-        self.output_connections[output].append((target_node.name, input))
-        target_node.input_connections[input] = (self.name, output)
+        self.output_connections[output].append((target_node, input))
+        target_node.input_connections[input] = (self, output)
 
         return target_node
 
@@ -151,14 +166,36 @@ class Node:
         """Implement the | operator for connecting nodes."""
         return self.connect_to(other)
 
+    def __rrshift__(self, other: list["Node"]) -> "Node":
+        """Implement the >> operator when node is on the right side.
+
+        This handles: [node1, node2, node3] >> node
+        """
+        if isinstance(other, list):
+            # Get this node's inputs
+            target_inputs = self.inputs or []
+
+            # Connect each source to the corresponding input
+            for i, source_node in enumerate(other):
+                if i < len(target_inputs):
+                    source_node.connect_to(self, input=target_inputs[i])
+                else:
+                    # If more sources than inputs, just connect to default
+                    source_node.connect_to(self)
+
+            return self
+        else:
+            # Fallback for single node (shouldn't normally happen)
+            return NotImplemented
+
     def add_input_connection(
-        self, input_name: str, source_node: str, output_name: str
+        self, input_name: str, source_node: "Node", output_name: str
     ) -> None:
         """Add an input connection to this node."""
         self.input_connections[input_name] = (source_node, output_name)
 
     def add_output_connection(
-        self, output_name: str, target_node: str, input_name: str
+        self, output_name: str, target_node: "Node", input_name: str
     ) -> None:
         """Add an output connection from this node."""
         if output_name not in self.output_connections:

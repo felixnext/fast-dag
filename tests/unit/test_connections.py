@@ -314,11 +314,11 @@ class TestMethodChaining:
             return value + 100
 
         # Connect specific outputs
-        dag.nodes["math_ops"].outputs["sum"].connect_to(
-            dag.nodes["use_sum"].inputs["value"]
+        dag.nodes["math_ops"].output_ports["sum"].connect_to(
+            dag.nodes["use_sum"].input_ports["value"]
         )
-        dag.nodes["math_ops"].outputs["product"].connect_to(
-            dag.nodes["use_product"].inputs["value"]
+        dag.nodes["math_ops"].output_ports["product"].connect_to(
+            dag.nodes["use_product"].input_ports["value"]
         )
 
         # Verify specific connections
@@ -490,3 +490,174 @@ class TestComplexConnectionPatterns:
 
         # Manual connections for specific chunks
         # This demonstrates the need for more sophisticated output routing
+
+
+class TestConnectionValidation:
+    """Test connection validation for multi-input convergence"""
+
+    def test_regular_node_rejects_multiple_connections_to_fewer_inputs(self):
+        """Test that regular nodes reject multiple source connections when sources > inputs"""
+        dag = DAG("test")
+
+        @dag.node
+        def source1() -> int:
+            return 1
+
+        @dag.node
+        def source2() -> int:
+            return 2
+
+        @dag.node
+        def source3() -> int:
+            return 3
+
+        @dag.node
+        def target(a: int) -> int:
+            return a
+
+        # Should fail when connecting 3 sources to 1 input
+        with pytest.raises(ValueError, match="Cannot connect 3 source nodes"):
+            [
+                dag.nodes["source1"],
+                dag.nodes["source2"],
+                dag.nodes["source3"],
+            ] >> dag.nodes["target"]
+
+    def test_regular_node_accepts_multiple_connections_to_different_inputs(self):
+        """Test that regular nodes accept multiple source connections to different inputs"""
+        dag = DAG("test")
+
+        @dag.node
+        def source1() -> int:
+            return 1
+
+        @dag.node
+        def source2() -> int:
+            return 2
+
+        @dag.node
+        def target(a: int, b: int) -> int:
+            return a + b
+
+        # Should work when connecting 2 sources to 2 inputs
+        [dag.nodes["source1"], dag.nodes["source2"]] >> dag.nodes["target"]
+
+        # Test execution
+        result = dag.run()
+        assert result == 3
+
+    def test_any_node_accepts_multiple_connections(self):
+        """Test that ANY nodes accept multiple source connections"""
+        dag = DAG("test")
+
+        @dag.node
+        def source1() -> int:
+            return 1
+
+        @dag.node
+        def source2() -> int:
+            return 2
+
+        @dag.any()
+        def any_target(a: int | None, b: int | None) -> int:
+            return (a or 0) + (b or 0)
+
+        # Should work with ANY node
+        [dag.nodes["source1"], dag.nodes["source2"]] >> dag.nodes["any_target"]
+
+        # Test execution
+        result = dag.run()
+        assert result == 3
+
+    def test_all_node_accepts_multiple_connections(self):
+        """Test that ALL nodes accept multiple source connections"""
+        dag = DAG("test")
+
+        @dag.node
+        def source1() -> int:
+            return 1
+
+        @dag.node
+        def source2() -> int:
+            return 2
+
+        @dag.all()
+        def all_target(a: int, b: int) -> int:
+            return a + b
+
+        # Should work with ALL node
+        [dag.nodes["source1"], dag.nodes["source2"]] >> dag.nodes["all_target"]
+
+        # Test execution
+        result = dag.run()
+        assert result == 3
+
+    def test_validation_rejects_multiple_connections_to_same_input(self):
+        """Test that validation rejects multiple connections to the same input for regular nodes"""
+        dag = DAG("test")
+
+        @dag.node
+        def source1() -> int:
+            return 1
+
+        @dag.node
+        def source2() -> int:
+            return 2
+
+        @dag.node
+        def target(a: int) -> int:
+            return a
+
+        # Make manual connections - two sources to same input
+        dag.connect("source1", "target", input="a")
+        dag.connect("source2", "target", input="a")
+
+        # Should fail validation
+        with pytest.raises(Exception, match="multiple connections"):
+            dag.validate_or_raise()
+
+    def test_validation_allows_multiple_connections_to_any_node(self):
+        """Test that validation allows multiple connections to ANY node inputs"""
+        dag = DAG("test")
+
+        @dag.node
+        def source1() -> int:
+            return 1
+
+        @dag.node
+        def source2() -> int:
+            return 2
+
+        @dag.any()
+        def any_target(a: int | None) -> int:
+            return a or 0
+
+        # Make manual connections - two sources to same input of ANY node
+        dag.connect("source1", "any_target", input="a")
+        dag.connect("source2", "any_target", input="a")
+
+        # Should pass validation
+        dag.validate_or_raise()
+
+    def test_validation_allows_multiple_connections_to_all_node(self):
+        """Test that validation allows multiple connections to ALL node inputs"""
+        dag = DAG("test")
+
+        @dag.node
+        def source1() -> int:
+            return 1
+
+        @dag.node
+        def source2() -> int:
+            return 2
+
+        @dag.all()
+        def all_target(a: int) -> int:
+            return a
+
+        # Make manual connections - two sources to same input of ALL node
+        dag.connect("source1", "all_target", input="a")
+        dag.connect("source2", "all_target", input="a")
+
+        # Should pass validation
+        dag.validate_or_raise()

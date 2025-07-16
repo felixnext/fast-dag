@@ -1,5 +1,6 @@
 """DAG (Directed Acyclic Graph) implementation."""
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -11,10 +12,11 @@ from .core.exceptions import (
     ExecutionError,
     InvalidNodeError,
     MissingConnectionError,
+    TimeoutError,
     ValidationError,
 )
 from .core.node import Node
-from .core.types import ConditionalReturn, NodeType
+from .core.types import ConditionalReturn, NodeType, SelectReturn
 from .core.validation import find_cycles, find_disconnected_nodes, find_entry_points
 
 if TYPE_CHECKING:
@@ -52,6 +54,7 @@ class DAG:
         outputs: list[str] | None = None,
         description: str | None = None,
         retry: int | None = None,
+        retry_delay: float | None = None,
         timeout: float | None = None,
     ) -> Callable:
         """Decorator to add a function as a node in the DAG.
@@ -68,6 +71,7 @@ class DAG:
                 description=description,
                 node_type=NodeType.STANDARD,
                 retry=retry,
+                retry_delay=retry_delay,
                 timeout=timeout,
             )
             self.add_node(node)
@@ -101,6 +105,98 @@ class DAG:
                 outputs=["true", "false"],  # Fixed outputs for conditional
                 description=description,
                 node_type=NodeType.CONDITIONAL,
+            )
+            self.add_node(node)
+            return node
+
+        if func is None:
+            return decorator  # type: ignore
+        else:
+            return decorator(func)  # type: ignore
+
+    def any(
+        self,
+        func: Callable | None = None,
+        *,
+        name: str | None = None,
+        inputs: list[str] | None = None,
+        description: str | None = None,
+    ) -> Callable:
+        """Decorator to add an ANY node to the DAG.
+
+        ANY nodes execute when ANY of their inputs are available (OR semantics).
+        Missing inputs are passed as None.
+        """
+
+        def decorator(f: Callable) -> Node:
+            node = Node(
+                func=f,
+                name=name,
+                inputs=inputs,
+                outputs=["result"],  # ANY nodes have single output
+                description=description,
+                node_type=NodeType.ANY,
+            )
+            self.add_node(node)
+            return node
+
+        if func is None:
+            return decorator  # type: ignore
+        else:
+            return decorator(func)  # type: ignore
+
+    def all(
+        self,
+        func: Callable | None = None,
+        *,
+        name: str | None = None,
+        inputs: list[str] | None = None,
+        description: str | None = None,
+    ) -> Callable:
+        """Decorator to add an ALL node to the DAG.
+
+        ALL nodes execute when ALL of their inputs are available (AND semantics).
+        This is the default behavior but made explicit.
+        """
+
+        def decorator(f: Callable) -> Node:
+            node = Node(
+                func=f,
+                name=name,
+                inputs=inputs,
+                outputs=["result"],  # ALL nodes have single output
+                description=description,
+                node_type=NodeType.ALL,
+            )
+            self.add_node(node)
+            return node
+
+        if func is None:
+            return decorator  # type: ignore
+        else:
+            return decorator(func)  # type: ignore
+
+    def select(
+        self,
+        func: Callable | None = None,
+        *,
+        name: str | None = None,
+        inputs: list[str] | None = None,
+        outputs: list[str] | None = None,
+        description: str | None = None,
+    ) -> Callable:
+        """Decorator to add a SELECT node to the DAG.
+        SELECT nodes provide multi-way branching based on SelectReturn results.
+        """
+
+        def decorator(f: Callable) -> Node:
+            node = Node(
+                func=f,
+                name=name,
+                inputs=inputs,
+                outputs=outputs,  # SELECT nodes have multiple outputs
+                description=description,
+                node_type=NodeType.SELECT,
             )
             self.add_node(node)
             return node
@@ -226,23 +322,29 @@ class DAG:
                         )
 
         # Check for multiple connections to the same input port
-        # NOTE: This is currently disabled as it breaks legitimate use cases
-        # where multiple nodes connect to the same input (OR semantics)
-        # This needs more thought on how to handle properly
-        # input_connections_count: dict[tuple[str, str], int] = {}
-        # for node_name, node_obj in self.nodes.items():
-        #     for output_name, connections in node_obj.output_connections.items():
-        #         for target_node, input_name in connections:
-        #             key = (target_node.name if target_node.name else "", input_name)
-        #             input_connections_count[key] = input_connections_count.get(key, 0) + 1
-        #
-        # # Report any inputs with multiple connections
-        # for (node_name, input_name), count in input_connections_count.items():
-        #     if count > 1:
-        #         errors.append(
-        #             f"Node '{node_name}' input '{input_name}' has multiple connections ({count}). "
-        #             "Only one connection per input is allowed."
-        #         )
+        # Only ANY and ALL nodes are allowed to have multiple connections to the same input
+        input_connections_count: dict[tuple[str, str], int] = {}
+        for _node_name, node_obj in self.nodes.items():
+            for _output_name, connections in node_obj.output_connections.items():
+                for target_node, input_name in connections:
+                    key = (target_node.name if target_node.name else "", input_name)
+                    input_connections_count[key] = (
+                        input_connections_count.get(key, 0) + 1
+                    )
+
+        # Report any inputs with multiple connections for non-ANY/ALL nodes
+        for (node_name, input_name), count in input_connections_count.items():
+            if count > 1 and node_name in self.nodes:
+                target_node = self.nodes[node_name]
+                if target_node.node_type not in (
+                    NodeType.ANY,
+                    NodeType.ALL,
+                ):
+                    errors.append(
+                        f"Node '{node_name}' input '{input_name}' has multiple connections ({count}). "
+                        "Only ANY and ALL nodes can have multiple connections to the same input. "
+                        "Use @dag.any() or @dag.all() decorators for multi-input convergence."
+                    )
 
         # Check conditional nodes have both branches connected
         for node_name, node_obj in self.nodes.items():
@@ -343,6 +445,167 @@ class DAG:
         self._execution_order = None
         self._is_validated = False
 
+    def _can_execute_node(self, node: Node, node_name: str) -> bool:  # noqa: ARG002
+        """Check if a node can be executed based on its input dependencies."""
+        if node.node_type == NodeType.ANY:
+            # ANY nodes can execute if at least one input is available
+            # If there are no connections, they can execute (entry nodes)
+            if not node.input_connections:
+                return True
+
+            # For ANY nodes, they can execute if at least one input is available
+            for _input_name, (source_node, _) in node.input_connections.items():
+                source_name = source_node.name
+                if (
+                    source_name
+                    and self.context is not None
+                    and source_name in self.context
+                ):
+                    return True
+
+            # Check if all source nodes have been processed (either succeeded or failed)
+            # This allows ANY nodes to execute with None inputs when all sources fail
+            all_processed = True
+            for _input_name, (source_node, _) in node.input_connections.items():
+                source_name = source_node.name
+                if (
+                    source_name
+                    and self.context is not None
+                    and (
+                        source_name not in self.context
+                        and f"{source_name}_error" not in self.context.metadata
+                    )
+                ):
+                    all_processed = False
+                    break
+
+            return all_processed
+        elif node.node_type == NodeType.ALL:
+            # ALL nodes need all inputs to be available
+            # If there are no connections, they can execute (entry nodes)
+            if not node.input_connections:
+                return True
+            for _input_name, (source_node, _) in node.input_connections.items():
+                source_name = source_node.name
+                if (
+                    source_name
+                    and self.context is not None
+                    and source_name not in self.context
+                ):
+                    return False
+            return True
+        else:
+            # STANDARD and CONDITIONAL nodes use ALL semantics
+            # If there are no connections, they can execute (entry nodes)
+            if not node.input_connections:
+                return True
+            for _input_name, (source_node, _) in node.input_connections.items():
+                source_name = source_node.name
+                if (
+                    source_name
+                    and self.context is not None
+                    and source_name not in self.context
+                ):
+                    return False
+            return True
+
+    def _prepare_node_inputs(
+        self,
+        node: Node,
+        node_name: str,
+        entry_nodes: list[str],
+        kwargs: dict[str, Any],
+        error_strategy: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Prepare inputs for node execution.
+
+        Returns:
+            tuple: (node_inputs, skip_node)
+        """
+        node_inputs = {}
+        skip_node = False
+
+        if node_name in entry_nodes:
+            # Entry node - get inputs from kwargs
+            for input_name in node.inputs or []:
+                if input_name in kwargs:
+                    node_inputs[input_name] = kwargs[input_name]
+                elif input_name == "context":
+                    continue  # Context is handled separately
+                else:
+                    # Check if it's a no-argument function
+                    if node.inputs:
+                        raise ValueError(
+                            f"Entry node '{node_name}' missing required input: '{input_name}'"
+                        )
+        else:
+            # Non-entry node - get inputs from connections and kwargs
+            # First, check for any inputs that might come from kwargs
+            for input_name in node.inputs or []:
+                if input_name in kwargs and input_name not in node.input_connections:
+                    node_inputs[input_name] = kwargs[input_name]
+
+            # Then get inputs from connections
+            for input_name, (
+                source_node,
+                output_name,
+            ) in node.input_connections.items():
+                source_name = source_node.name
+                if source_name is None:
+                    raise ExecutionError("Source node has no name")
+
+                if self.context is not None and source_name not in self.context:
+                    if node.node_type == NodeType.ANY:
+                        # ANY nodes accept None for missing inputs
+                        node_inputs[input_name] = None
+                        continue
+                    elif error_strategy in ("continue", "continue_skip"):
+                        # Skip this node if its dependency failed
+                        skip_node = True
+                        break
+                    elif error_strategy == "continue_none":
+                        # Pass None for missing dependencies
+                        node_inputs[input_name] = None
+                        continue
+                    else:
+                        raise ExecutionError(
+                            f"Node '{node_name}' requires result from '{source_name}' which hasn't executed"
+                        )
+
+                source_result = (
+                    self.context[source_name] if self.context is not None else None
+                )
+
+                # Handle output selection for multi-output nodes
+                if isinstance(source_result, dict) and output_name in source_result:
+                    node_inputs[input_name] = source_result[output_name]
+                elif isinstance(source_result, ConditionalReturn):
+                    # Handle conditional returns
+                    if (
+                        output_name == "true"
+                        and source_result.condition
+                        or output_name == "false"
+                        and not source_result.condition
+                    ):
+                        node_inputs[input_name] = source_result.value
+                    else:
+                        # Skip this node if on wrong branch
+                        skip_node = True
+                        break
+                elif isinstance(source_result, SelectReturn):
+                    # Handle select returns
+                    if output_name == source_result.branch:
+                        node_inputs[input_name] = source_result.value
+                    else:
+                        # Skip this node if on wrong branch
+                        skip_node = True
+                        break
+                else:
+                    # Single output node
+                    node_inputs[input_name] = source_result
+
+        return node_inputs, skip_node
+
     def run(
         self,
         context: Context | None = None,
@@ -355,7 +618,11 @@ class DAG:
         Args:
             context: Execution context (created if not provided)
             mode: Execution mode (sequential, parallel, async)
-            error_strategy: How to handle errors (stop, continue, retry)
+            error_strategy: How to handle errors:
+                - "stop": Stop execution on first error (default)
+                - "continue": Log errors and continue, skip dependent nodes
+                - "continue_none": Log errors, store None as result, continue dependent nodes
+                - "continue_skip": Log errors, skip dependent nodes (same as "continue")
             **kwargs: Input values for entry nodes
 
         Returns:
@@ -386,79 +653,26 @@ class DAG:
 
         # Execute nodes in topological order
         last_result = None
+        start_time = time.time()
+
+        # Initialize metrics
+        self.context.metrics["node_times"] = {}
+        self.context.metrics["execution_order"] = []
 
         for node_name in exec_order:
             node = self.nodes[node_name]
 
+            # Check if this node can execute (for ANY/ALL nodes)
+            if not self._can_execute_node(node, node_name):
+                continue  # Skip nodes that can't execute yet
+
             # Prepare inputs for the node
-            node_inputs = {}
+            node_inputs, skip_node = self._prepare_node_inputs(
+                node, node_name, entry_nodes, kwargs, error_strategy
+            )
 
-            if node_name in entry_nodes:
-                # Entry node - get inputs from kwargs
-                for input_name in node.inputs or []:
-                    if input_name in kwargs:
-                        node_inputs[input_name] = kwargs[input_name]
-                    elif input_name == "context":
-                        continue  # Context is handled separately
-                    else:
-                        # Check if it's a no-argument function
-                        if node.inputs:
-                            raise ValueError(
-                                f"Entry node '{node_name}' missing required input: '{input_name}'"
-                            )
-            else:
-                # Non-entry node - get inputs from connections and kwargs
-                skip_node = False
-
-                # First, check for any inputs that might come from kwargs
-                for input_name in node.inputs or []:
-                    if (
-                        input_name in kwargs
-                        and input_name not in node.input_connections
-                    ):
-                        node_inputs[input_name] = kwargs[input_name]
-
-                # Then get inputs from connections
-                for input_name, (
-                    source_node,
-                    output_name,
-                ) in node.input_connections.items():
-                    source_name = source_node.name
-                    if source_name is None:
-                        raise ExecutionError("Source node has no name")
-                    if source_name not in self.context:
-                        if error_strategy == "continue":
-                            # Skip this node if its dependency failed
-                            skip_node = True
-                            break
-                        raise ExecutionError(
-                            f"Node '{node_name}' requires result from '{source_name}' which hasn't executed"
-                        )
-
-                    source_result = self.context[source_name]
-
-                    # Handle output selection for multi-output nodes
-                    if isinstance(source_result, dict) and output_name in source_result:
-                        node_inputs[input_name] = source_result[output_name]
-                    elif isinstance(source_result, ConditionalReturn):
-                        # Handle conditional returns
-                        if (
-                            output_name == "true"
-                            and source_result.condition
-                            or output_name == "false"
-                            and not source_result.condition
-                        ):
-                            node_inputs[input_name] = source_result.value
-                        else:
-                            # Skip this node if on wrong branch
-                            skip_node = True
-                            break
-                    else:
-                        # Single output node
-                        node_inputs[input_name] = source_result
-
-                if skip_node:
-                    continue  # Skip to next node
+            if skip_node:
+                continue  # Skip to next node
 
             # Execute the node
             try:
@@ -467,7 +681,17 @@ class DAG:
                         "Async execution not yet supported in sync run()"
                     )
 
+                # Record start time for this node
+                node_start_time = time.time()
+
                 result = node.execute(node_inputs, context=self.context)
+
+                # Record execution time
+                node_end_time = time.time()
+                self.context.metrics["node_times"][node_name] = (
+                    node_end_time - node_start_time
+                )
+                self.context.metrics["execution_order"].append(node_name)
 
                 # Store result in context
                 self.context.set_result(node_name, result)
@@ -476,17 +700,41 @@ class DAG:
             except Exception as e:
                 if error_strategy == "stop":
                     # Re-raise common exceptions as-is to preserve type
-                    if isinstance(e, RuntimeError | ValueError | TypeError | KeyError):
+                    if isinstance(
+                        e, RuntimeError | TypeError | KeyError | TimeoutError
+                    ):
                         raise
                     raise ExecutionError(
                         f"Error executing node '{node_name}': {e}"
                     ) from e
                 elif error_strategy == "continue":
-                    # Log error and continue
+                    # For ANY nodes, ValueError should be re-raised (validation error)
+                    if node.node_type == NodeType.ANY and isinstance(e, ValueError):
+                        raise
+                    # Log error and continue for other cases
+                    self.context.metadata[f"{node_name}_error"] = str(e)
+                    continue
+                elif error_strategy == "continue_none":
+                    # For ANY nodes, ValueError should be re-raised (validation error)
+                    if node.node_type == NodeType.ANY and isinstance(e, ValueError):
+                        raise
+                    # Store None as the result and continue
+                    self.context.set_result(node_name, None)
+                    self.context.metadata[f"{node_name}_error"] = str(e)
+                    continue
+                elif error_strategy == "continue_skip":
+                    # For ANY nodes, ValueError should be re-raised (validation error)
+                    if node.node_type == NodeType.ANY and isinstance(e, ValueError):
+                        raise
+                    # Log error but don't store any result - dependent nodes will be skipped
                     self.context.metadata[f"{node_name}_error"] = str(e)
                     continue
                 else:
                     raise ValueError(f"Unknown error strategy: {error_strategy}") from e
+
+        # Record total execution time
+        end_time = time.time()
+        self.context.metrics["total_duration"] = end_time - start_time
 
         # Return the last result (or could return results from all sink nodes)
         return last_result
@@ -503,7 +751,11 @@ class DAG:
         Args:
             context: Execution context (created if not provided)
             mode: Execution mode (only sequential supported for async)
-            error_strategy: How to handle errors (stop, continue, retry)
+            error_strategy: How to handle errors:
+                - "stop": Stop execution on first error (default)
+                - "continue": Log errors and continue, skip dependent nodes
+                - "continue_none": Log errors, store None as result, continue dependent nodes
+                - "continue_skip": Log errors, skip dependent nodes (same as "continue")
             **kwargs: Input values for entry nodes
 
         Returns:
@@ -534,86 +786,43 @@ class DAG:
 
         # Execute nodes in topological order
         last_result = None
+        start_time = time.time()
+
+        # Initialize metrics
+        self.context.metrics["node_times"] = {}
+        self.context.metrics["execution_order"] = []
 
         for node_name in exec_order:
             node = self.nodes[node_name]
 
+            # Check if this node can execute (for ANY/ALL nodes)
+            if not self._can_execute_node(node, node_name):
+                continue  # Skip nodes that can't execute yet
+
             # Prepare inputs for the node
-            node_inputs = {}
+            node_inputs, skip_node = self._prepare_node_inputs(
+                node, node_name, entry_nodes, kwargs, error_strategy
+            )
 
-            if node_name in entry_nodes:
-                # Entry node - get inputs from kwargs
-                for input_name in node.inputs or []:
-                    if input_name in kwargs:
-                        node_inputs[input_name] = kwargs[input_name]
-                    elif input_name == "context":
-                        continue  # Context is handled separately
-                    else:
-                        # Check if it's a no-argument function
-                        if node.inputs:
-                            raise ValueError(
-                                f"Entry node '{node_name}' missing required input: '{input_name}'"
-                            )
-            else:
-                # Non-entry node - get inputs from connections and kwargs
-                skip_node = False
-
-                # First, check for any inputs that might come from kwargs
-                for input_name in node.inputs or []:
-                    if (
-                        input_name in kwargs
-                        and input_name not in node.input_connections
-                    ):
-                        node_inputs[input_name] = kwargs[input_name]
-
-                # Then get inputs from connections
-                for input_name, (
-                    source_node,
-                    output_name,
-                ) in node.input_connections.items():
-                    source_name = source_node.name
-                    if source_name is None:
-                        raise ExecutionError("Source node has no name")
-                    if source_name not in self.context:
-                        if error_strategy == "continue":
-                            # Skip this node if its dependency failed
-                            skip_node = True
-                            break
-                        raise ExecutionError(
-                            f"Node '{node_name}' requires result from '{source_name}' which hasn't executed"
-                        )
-
-                    source_result = self.context[source_name]
-
-                    # Handle output selection for multi-output nodes
-                    if isinstance(source_result, dict) and output_name in source_result:
-                        node_inputs[input_name] = source_result[output_name]
-                    elif isinstance(source_result, ConditionalReturn):
-                        # Handle conditional returns
-                        if (
-                            output_name == "true"
-                            and source_result.condition
-                            or output_name == "false"
-                            and not source_result.condition
-                        ):
-                            node_inputs[input_name] = source_result.value
-                        else:
-                            # Skip this node if on wrong branch
-                            skip_node = True
-                            break
-                    else:
-                        # Single output node
-                        node_inputs[input_name] = source_result
-
-                if skip_node:
-                    continue  # Skip to next node
+            if skip_node:
+                continue  # Skip to next node
 
             # Execute the node
             try:
+                # Record start time for this node
+                node_start_time = time.time()
+
                 if node.is_async:
                     result = await node.execute_async(node_inputs, context=self.context)
                 else:
                     result = node.execute(node_inputs, context=self.context)
+
+                # Record execution time
+                node_end_time = time.time()
+                self.context.metrics["node_times"][node_name] = (
+                    node_end_time - node_start_time
+                )
+                self.context.metrics["execution_order"].append(node_name)
 
                 # Store result in context
                 self.context.set_result(node_name, result)
@@ -622,17 +831,41 @@ class DAG:
             except Exception as e:
                 if error_strategy == "stop":
                     # Re-raise common exceptions as-is to preserve type
-                    if isinstance(e, RuntimeError | ValueError | TypeError | KeyError):
+                    if isinstance(
+                        e, RuntimeError | TypeError | KeyError | TimeoutError
+                    ):
                         raise
                     raise ExecutionError(
                         f"Error executing node '{node_name}': {e}"
                     ) from e
                 elif error_strategy == "continue":
-                    # Log error and continue
+                    # For ANY nodes, ValueError should be re-raised (validation error)
+                    if node.node_type == NodeType.ANY and isinstance(e, ValueError):
+                        raise
+                    # Log error and continue for other cases
+                    self.context.metadata[f"{node_name}_error"] = str(e)
+                    continue
+                elif error_strategy == "continue_none":
+                    # For ANY nodes, ValueError should be re-raised (validation error)
+                    if node.node_type == NodeType.ANY and isinstance(e, ValueError):
+                        raise
+                    # Store None as the result and continue
+                    self.context.set_result(node_name, None)
+                    self.context.metadata[f"{node_name}_error"] = str(e)
+                    continue
+                elif error_strategy == "continue_skip":
+                    # For ANY nodes, ValueError should be re-raised (validation error)
+                    if node.node_type == NodeType.ANY and isinstance(e, ValueError):
+                        raise
+                    # Log error but don't store any result - dependent nodes will be skipped
                     self.context.metadata[f"{node_name}_error"] = str(e)
                     continue
                 else:
                     raise ValueError(f"Unknown error strategy: {error_strategy}") from e
+
+        # Record total execution time
+        end_time = time.time()
+        self.context.metrics["total_duration"] = end_time - start_time
 
         # Return the last result
         return last_result
@@ -711,15 +944,14 @@ class DAG:
 
             node = self.nodes[node_name]
 
-            # Check if all dependencies are satisfied
-            can_execute = True
-            skip_node = False
+            # Check if this node can execute (for ANY/ALL nodes)
+            if not self._can_execute_node(node, node_name):
+                continue  # Skip nodes that can't execute yet
 
-            if node_name in entry_nodes:
-                # Entry node - can always execute if not done yet
-                pass
-            else:
-                # Check input connections
+            # Check for conditional branches and skip logic
+            skip_node = False
+            if node_name not in entry_nodes:
+                # Check for conditional branches
                 for _input_name, (
                     source_node,
                     output_name,
@@ -728,69 +960,35 @@ class DAG:
                     if source_name is None:
                         raise ExecutionError("Source node has no name")
 
-                    if source_name not in context:
-                        # Dependency not satisfied
-                        can_execute = False
-                        break
-
-                    # Check for conditional branches
-                    source_result = context.get(source_name)
-                    if (
-                        source_result
-                        and isinstance(source_result, ConditionalReturn)
-                        and (
-                            output_name == "true"
-                            and not source_result.condition
-                            or output_name == "false"
-                            and source_result.condition
-                        )
-                    ):
-                        # Wrong branch - skip this node
-                        skip_node = True
-                        break
+                    if source_name in context:
+                        source_result = context.get(source_name)
+                        if (
+                            source_result
+                            and isinstance(source_result, ConditionalReturn)
+                            and (
+                                output_name == "true"
+                                and not source_result.condition
+                                or output_name == "false"
+                                and source_result.condition
+                            )
+                        ) or (
+                            source_result
+                            and isinstance(source_result, SelectReturn)
+                            and output_name != source_result.branch
+                        ):
+                            # Wrong branch - skip this node
+                            skip_node = True
+                            break
 
             if skip_node:
                 # Mark as skipped
                 context.set_result(node_name, None)
                 continue
 
-            if not can_execute:
-                # Dependencies not ready
-                continue
-
             # Execute this node
-            node_inputs = {}
-
-            if node_name in entry_nodes:
-                # Entry node - get inputs from kwargs
-                for input_name in node.inputs or []:
-                    if input_name in kwargs:
-                        node_inputs[input_name] = kwargs[input_name]
-                    elif input_name == "context":
-                        continue
-                    else:
-                        if node.inputs:
-                            raise ValueError(
-                                f"Entry node '{node_name}' missing required input: '{input_name}'"
-                            )
-            else:
-                # Get inputs from connections
-                for input_name, (
-                    source_node,
-                    output_name,
-                ) in node.input_connections.items():
-                    source_name = source_node.name
-                    if source_name is None:
-                        raise ExecutionError("Source node has no name")
-                    source_result = context[source_name]
-
-                    # Handle output selection
-                    if isinstance(source_result, dict) and output_name in source_result:
-                        node_inputs[input_name] = source_result[output_name]
-                    elif isinstance(source_result, ConditionalReturn):
-                        node_inputs[input_name] = source_result.value
-                    else:
-                        node_inputs[input_name] = source_result
+            node_inputs, _ = self._prepare_node_inputs(
+                node, node_name, entry_nodes, kwargs, "stop"
+            )
 
             # Execute the node
             if node.is_async:

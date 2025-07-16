@@ -313,9 +313,17 @@ class FSM(DAG):
                     raise ExecutionError(
                         f"Error executing state '{self.current_state}': {e}"
                     ) from e
-                elif error_strategy == "continue":
+                elif error_strategy in ("continue", "continue_none", "continue_skip"):
                     # Log error and try to continue
                     self.context.metadata[f"{self.current_state}_error"] = str(e)
+
+                    # For continue_none, store None as the result
+                    if error_strategy == "continue_none":
+                        self.context.set_result(self.current_state, None)
+                        if self.current_state not in self.context.cycle_results:
+                            self.context.cycle_results[self.current_state] = []
+                        self.context.cycle_results[self.current_state].append(None)
+
                     # Move to error state if defined
                     if (
                         self.current_state in self.state_transitions

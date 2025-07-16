@@ -1,10 +1,14 @@
 """Node implementation for fast-dag."""
 
+import asyncio
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .connections import ConditionalOutputProxy
+from .connections import ConditionalOutputProxy, InputCollection, OutputCollection
+from .exceptions import TimeoutError
 from .introspection import (
     get_function_description,
     get_function_inputs,
@@ -32,6 +36,7 @@ class Node:
     node_type: NodeType = NodeType.STANDARD
     metadata: dict[str, Any] = field(default_factory=dict)
     retry: int | None = None
+    retry_delay: float | None = None
     timeout: float | None = None
 
     # Connection tracking
@@ -91,6 +96,16 @@ class Node:
         if self._is_async is None:
             self._is_async = is_async_function(self.func)
         return self._is_async
+
+    @property
+    def input_ports(self) -> InputCollection:
+        """Get input collection for this node."""
+        return InputCollection(self)
+
+    @property
+    def output_ports(self) -> OutputCollection:
+        """Get output collection for this node."""
+        return OutputCollection(self)
 
     @property
     def on_true(self) -> ConditionalOutputProxy:
@@ -182,6 +197,22 @@ class Node:
         This handles: [node1, node2, node3] >> node
         """
         if isinstance(other, list):
+            from .types import NodeType
+
+            # Check if multiple source connections are allowed
+            # Only ANY and ALL nodes can have multiple source connections to the same input
+            # Multiple sources to different inputs are allowed for all node types
+            if len(other) > 1 and self.node_type not in (NodeType.ANY, NodeType.ALL):
+                target_inputs = self.inputs or []
+
+                # If we have fewer target inputs than sources, some inputs will get multiple connections
+                if len(other) > len(target_inputs):
+                    raise ValueError(
+                        f"Cannot connect {len(other)} source nodes to node '{self.name}' "
+                        f"with only {len(target_inputs)} inputs. "
+                        "Use @dag.any() or @dag.all() decorators for multi-input convergence."
+                    )
+
             # Get this node's inputs
             target_inputs = self.inputs or []
 
@@ -229,8 +260,67 @@ class Node:
         if self.has_context and context is not None:
             kwargs["context"] = context
 
-        # Execute the function
-        return self.func(**kwargs)
+        # Execute with retry logic if configured
+        if self.retry is not None and self.retry > 1:
+            return self._execute_with_retry(kwargs)
+        else:
+            return self._execute_once(kwargs)
+
+    def _execute_with_retry(self, kwargs: dict[str, Any]) -> Any:
+        """Execute with retry logic and exponential backoff."""
+        max_retries = self.retry or 1
+        base_delay = self.retry_delay or 0.1
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                return self._execute_once(kwargs)
+            except Exception as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    # Calculate exponential backoff delay
+                    delay = base_delay * (2**attempt)
+                    time.sleep(delay)
+                else:
+                    # Last attempt failed, raise the exception
+                    raise
+
+        # This should never be reached, but for safety
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Retry logic failed unexpectedly")
+
+    def _execute_once(self, kwargs: dict[str, Any]) -> Any:
+        """Execute the function once with timeout handling."""
+        if self.timeout is not None:
+            # Use threading for timeout to avoid signal issues
+            result = [None]
+            exception = [None]
+
+            def target():
+                try:
+                    result[0] = self.func(**kwargs)
+                except Exception as e:
+                    exception[0] = e
+
+            thread = threading.Thread(target=target)
+            thread.start()
+            thread.join(timeout=self.timeout)
+
+            if thread.is_alive():
+                # Thread is still running, timeout occurred
+                raise TimeoutError(
+                    f"Node '{self.name}' execution timed out after {self.timeout} seconds"
+                )
+
+            # Check if exception occurred
+            if exception[0] is not None:
+                raise exception[0]
+
+            return result[0]
+        else:
+            # Execute without timeout
+            return self.func(**kwargs)
 
     async def execute_async(
         self, inputs: dict[str, Any], context: Any | None = None
@@ -254,8 +344,48 @@ class Node:
         if self.has_context and context is not None:
             kwargs["context"] = context
 
-        # Execute the async function
-        return await self.func(**kwargs)
+        # Execute with retry logic if configured
+        if self.retry is not None and self.retry > 1:
+            return await self._execute_with_retry_async(kwargs)
+        else:
+            return await self._execute_once_async(kwargs)
+
+    async def _execute_with_retry_async(self, kwargs: dict[str, Any]) -> Any:
+        """Execute async with retry logic and exponential backoff."""
+        max_retries = self.retry or 1
+        base_delay = self.retry_delay or 0.1
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self._execute_once_async(kwargs)
+            except Exception as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    # Calculate exponential backoff delay
+                    delay = base_delay * (2**attempt)
+                    await asyncio.sleep(delay)
+                else:
+                    # Last attempt failed, raise the exception
+                    raise
+
+        # This should never be reached, but for safety
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Retry logic failed unexpectedly")
+
+    async def _execute_once_async(self, kwargs: dict[str, Any]) -> Any:
+        """Execute the async function once with timeout handling."""
+        if self.timeout is not None:
+            try:
+                return await asyncio.wait_for(self.func(**kwargs), timeout=self.timeout)
+            except asyncio.TimeoutError as e:
+                raise TimeoutError(
+                    f"Node '{self.name}' execution timed out after {self.timeout} seconds"
+                ) from e
+        else:
+            # Execute without timeout
+            return await self.func(**kwargs)
 
     def __repr__(self) -> str:
         """String representation of the node."""

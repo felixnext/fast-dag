@@ -12,6 +12,8 @@ class NodeType(Enum):
     CONDITIONAL = "conditional"
     SELECT = "select"
     FSM_STATE = "fsm_state"
+    ANY = "any"
+    ALL = "all"
 
 
 @dataclass

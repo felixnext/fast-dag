@@ -13,6 +13,7 @@ from fast_dag import (
     FSMContext,
     InvalidNodeError,
     MissingConnectionError,
+    TimeoutError,
     ValidationError,
 )
 

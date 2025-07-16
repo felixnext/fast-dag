@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from fast_dag import DAG, ConditionalReturn, Context, ExecutionError
+from fast_dag import DAG, ConditionalReturn, Context, ExecutionError, TimeoutError
 
 
 class TestBasicExecution:
@@ -361,6 +361,82 @@ class TestErrorHandling:
         assert dag.get("independent") == 42
         assert dag.get("will_fail") is None  # Failed node
 
+    def test_error_with_continue_none_strategy(self):
+        """Test continue_none error strategy"""
+        dag = DAG("continue_none_test")
+
+        @dag.node
+        def start() -> int:
+            return 10
+
+        @dag.node
+        def will_fail(x: int) -> int:
+            raise ValueError("Fail")
+
+        @dag.node
+        def dependent(x: int | None) -> str:
+            if x is None:
+                return "Got None"
+            return f"Got {x}"
+
+        @dag.node
+        def independent() -> int:
+            return 42
+
+        dag.connect("start", "will_fail")
+        dag.connect("will_fail", "dependent")
+        # independent has no dependencies
+
+        # Run with continue_none strategy
+        dag.run(error_strategy="continue_none")
+
+        # Should execute all nodes
+        assert dag.get("start") == 10
+        assert dag.get("will_fail") is None  # Failed node gets None
+        assert dag.get("dependent") == "Got None"  # Dependent gets None
+        assert dag.get("independent") == 42
+
+        # Should have error metadata
+        assert "will_fail_error" in dag.context.metadata
+        assert dag.context.metadata["will_fail_error"] == "Fail"
+
+    def test_error_with_continue_skip_strategy(self):
+        """Test continue_skip error strategy"""
+        dag = DAG("continue_skip_test")
+
+        @dag.node
+        def start() -> int:
+            return 10
+
+        @dag.node
+        def will_fail(x: int) -> int:
+            raise ValueError("Fail")
+
+        @dag.node
+        def dependent(x: int) -> str:
+            return f"Got {x}"
+
+        @dag.node
+        def independent() -> int:
+            return 42
+
+        dag.connect("start", "will_fail")
+        dag.connect("will_fail", "dependent")
+        # independent has no dependencies
+
+        # Run with continue_skip strategy
+        dag.run(error_strategy="continue_skip")
+
+        # Should execute start and independent, but skip dependent
+        assert dag.get("start") == 10
+        assert dag.get("will_fail") is None  # Failed node not in results
+        assert dag.get("dependent") is None  # Dependent was skipped
+        assert dag.get("independent") == 42
+
+        # Should have error metadata
+        assert "will_fail_error" in dag.context.metadata
+        assert dag.context.metadata["will_fail_error"] == "Fail"
+
     def test_timeout_handling(self):
         """Test timeout during execution"""
         dag = DAG("timeout_test")
@@ -370,7 +446,7 @@ class TestErrorHandling:
             await asyncio.sleep(1.0)  # Will timeout
             return 42
 
-        with pytest.raises(ExecutionError, match="timeout"):
+        with pytest.raises(TimeoutError, match="timed out"):
             asyncio.run(dag.run_async())
 
 

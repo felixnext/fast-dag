@@ -10,6 +10,26 @@ This document specifies the visualization capabilities of fast-dag, supporting b
 4. **Interactive**: Support for clickable, zoomable diagrams
 5. **Export Ready**: High-quality output for documentation
 
+## Context-Aware Visualization
+
+A key feature of fast-dag's visualization is the ability to pass an execution context to the visualization methods. This allows diagrams to show:
+
+- **Node Status**: Success (✅), Failed (❌), or Pending (⏸️)
+- **Execution Results**: Preview of node outputs (for simple types)
+- **Performance Metrics**: Execution time for each node
+- **Error Information**: Highlight failed nodes with error details
+- **Execution Path**: Show which nodes were actually executed
+
+Example usage:
+```python
+# Run workflow and capture context
+context = dag.run(inputs={"data": "test"})
+
+# Generate visualization with execution data
+dag.save_mermaid("results.mmd", context=context)
+dag.save_graphviz("results.png", context=context)
+```
+
 ## Architecture
 
 ### Visualization Protocol
@@ -43,11 +63,12 @@ class Visualizer(Protocol):
     def render_dag(
         self,
         dag: DAG,
+        context: Context | None = None,
         node_styles: dict[str, NodeStyle] | None = None,
         edge_styles: dict[tuple[str, str], EdgeStyle] | None = None,
         layout: str = "auto"
     ) -> str:
-        """Render DAG to diagram format"""
+        """Render DAG to diagram format, optionally with execution context"""
         ...
     
     def render_with_results(
@@ -72,17 +93,24 @@ class MermaidRenderer:
     def render_dag(
         self,
         dag: DAG,
+        context: Context | None = None,
         node_styles: dict[str, NodeStyle] | None = None,
         edge_styles: dict[tuple[str, str], EdgeStyle] | None = None,
         layout: str = "TB"  # Top-Bottom
     ) -> str:
-        """Generate Mermaid flowchart"""
+        """Generate Mermaid flowchart, optionally with execution context"""
         lines = [f"flowchart {layout}"]
         
         # Add nodes
         for name, node in dag.nodes.items():
             style = node_styles.get(name) if node_styles else None
-            node_def = self._format_node(name, node, style)
+            
+            # If context provided, use execution-aware formatting
+            if context:
+                node_def = self._format_node_with_context(name, node, context, style)
+            else:
+                node_def = self._format_node(name, node, style)
+            
             lines.append(f"    {node_def}")
         
         # Add edges
@@ -91,6 +119,10 @@ class MermaidRenderer:
                 edge_style = edge_styles.get((from_node, to_node)) if edge_styles else None
                 edge_def = self._format_edge(from_node, to_node, edge_style)
                 lines.append(f"    {edge_def}")
+        
+        # Add styles if context provided
+        if context:
+            lines.extend(self._generate_execution_styles())
         
         return "\n".join(lines)
     
@@ -108,6 +140,48 @@ class MermaidRenderer:
         else:
             return f'{name}["{label}"]'
     
+    def _format_node_with_context(
+        self,
+        name: str,
+        node: Node,
+        context: Context,
+        style: NodeStyle | None
+    ) -> str:
+        """Format node with execution context"""
+        label_parts = [name]
+        
+        # Add execution status
+        if name in context.results:
+            if isinstance(context.results[name], Exception):
+                label_parts.append("❌ Failed")
+                css_class = ":::error"
+            else:
+                label_parts.append("✅ Success")
+                css_class = ":::success"
+                
+                # Add result preview if small enough
+                result = context.results[name]
+                if isinstance(result, (str, int, float, bool)):
+                    label_parts.append(f"Result: {str(result)[:30]}")
+        else:
+            label_parts.append("⏸️ Pending")
+            css_class = ":::pending"
+        
+        # Add timing if available
+        if hasattr(context, 'metrics') and context.metrics.get('node_times', {}).get(name):
+            time = context.metrics['node_times'][name]
+            label_parts.append(f"⏱️ {time:.2f}s")
+        
+        label = "<br/>".join(label_parts)
+        
+        # Determine shape
+        if style and style.shape == "diamond":
+            return f'{name}{{{{{label}}}}{css_class}'
+        elif style and style.shape == "circle":
+            return f'{name}(({label})){css_class}'
+        else:
+            return f'{name}["{label}"]{css_class}'
+    
     def _format_edge(
         self,
         from_node: str,
@@ -116,9 +190,9 @@ class MermaidRenderer:
     ) -> str:
         """Format edge definition"""
         if style and style.style == "dashed":
-            arrow = "-.->
+            arrow = "-.->"
         elif style and style.style == "dotted":
-            arrow = "-..->
+            arrow = "-..->"
         else:
             arrow = "-->"
         
@@ -128,6 +202,16 @@ class MermaidRenderer:
             edge = f'{from_node} {arrow}|{style.label}| {to_node}'
         
         return edge
+    
+    def _generate_execution_styles(self) -> list[str]:
+        """Generate CSS styles for execution states"""
+        return [
+            "",
+            "    classDef success fill:#90EE90,stroke:#006400,stroke-width:2px;",
+            "    classDef error fill:#FFB6C1,stroke:#8B0000,stroke-width:2px;",
+            "    classDef pending fill:#D3D3D3,stroke:#696969,stroke-width:1px;",
+            "    classDef running fill:#87CEEB,stroke:#0000CD,stroke-width:3px;"
+        ]
 ```
 
 ### Mermaid with Results
@@ -237,11 +321,12 @@ class GraphvizRenderer:
     def render_dag(
         self,
         dag: DAG,
+        context: Context | None = None,
         node_styles: dict[str, NodeStyle] | None = None,
         edge_styles: dict[tuple[str, str], EdgeStyle] | None = None,
         layout: str = "dot"
     ) -> str:
-        """Generate DOT format"""
+        """Generate DOT format, optionally with execution context"""
         lines = ["digraph G {"]
         
         # Graph attributes
@@ -255,7 +340,10 @@ class GraphvizRenderer:
         # Add nodes
         for name, node in dag.nodes.items():
             style = node_styles.get(name) if node_styles else None
-            lines.append(self._format_node(name, node, style))
+            if context:
+                lines.append(self._format_node_with_context(name, node, context, style))
+            else:
+                lines.append(self._format_node(name, node, style))
         
         # Add edges
         for from_node, connections in self._get_all_connections(dag):
@@ -284,6 +372,65 @@ class GraphvizRenderer:
                 attrs.append(f'color="{style.color}"')
             if style.font_size:
                 attrs.append(f'fontsize="{style.font_size}"')
+        
+        attr_str = ", ".join(attrs)
+        return f'    "{name}" [{attr_str}];'
+    
+    def _format_node_with_context(
+        self,
+        name: str,
+        node: Node,
+        context: Context,
+        style: NodeStyle | None
+    ) -> str:
+        """Format node with execution context in DOT syntax"""
+        attrs = []
+        
+        # Build label with execution info
+        label_parts = [name]
+        
+        # Add execution status and style
+        if name in context.results:
+            if isinstance(context.results[name], Exception):
+                label_parts.append("❌ Failed")
+                attrs.append('fillcolor="#FFB6C1"')
+                attrs.append('color="#8B0000"')
+                attrs.append('penwidth="2"')
+            else:
+                label_parts.append("✅ Success")
+                attrs.append('fillcolor="#90EE90"')
+                attrs.append('color="#006400"')
+                
+                # Add result preview
+                result = context.results[name]
+                if isinstance(result, (str, int, float, bool)):
+                    preview = str(result)[:30]
+                    if len(str(result)) > 30:
+                        preview += "..."
+                    label_parts.append(f"Result: {preview}")
+        else:
+            label_parts.append("⏸️ Pending")
+            attrs.append('fillcolor="#D3D3D3"')
+            attrs.append('color="#696969"')
+        
+        # Add timing
+        if hasattr(context, 'metrics') and context.metrics.get('node_times', {}).get(name):
+            time = context.metrics['node_times'][name]
+            label_parts.append(f"Time: {time:.2f}s")
+        
+        # Create label
+        label = "\\n".join(label_parts)
+        attrs.insert(0, f'label="{label}"')
+        
+        # Apply custom style overrides
+        if style:
+            if style.shape:
+                attrs.append(f'shape="{style.shape}"')
+            if style.font_size:
+                attrs.append(f'fontsize="{style.font_size}"')
+        
+        # Default style attributes
+        attrs.append('style="rounded,filled"')
         
         attr_str = ", ".join(attrs)
         return f'    "{name}" [{attr_str}];'
@@ -365,10 +512,15 @@ class GraphvizAdvancedRenderer(GraphvizRenderer):
 class DiagramExporter:
     """Export diagrams to various formats"""
     
-    def export_mermaid(self, dag: DAG, filepath: str) -> None:
-        """Export Mermaid diagram"""
+    def export_mermaid(
+        self,
+        dag: DAG,
+        filepath: str,
+        context: Context | None = None
+    ) -> None:
+        """Export Mermaid diagram, optionally with execution context"""
         renderer = MermaidRenderer()
-        content = renderer.render_dag(dag)
+        content = renderer.render_dag(dag, context=context)
         
         with open(filepath, "w") as f:
             f.write(content)
@@ -377,14 +529,15 @@ class DiagramExporter:
         self,
         dag: DAG,
         filepath: str,
+        context: Context | None = None,
         format: str = "png",
         engine: str = "dot"
     ) -> None:
-        """Export Graphviz diagram to image"""
+        """Export Graphviz diagram to image, optionally with execution context"""
         import graphviz
         
         renderer = GraphvizRenderer()
-        dot_content = renderer.render_dag(dag)
+        dot_content = renderer.render_dag(dag, context=context)
         
         # Create graph
         graph = graphviz.Source(dot_content, engine=engine)
@@ -393,25 +546,75 @@ class DiagramExporter:
         output_path = filepath.rsplit(".", 1)[0]  # Remove extension
         graph.render(output_path, format=format, cleanup=True)
     
-    def export_html(self, dag: DAG, filepath: str) -> None:
-        """Export interactive HTML with Mermaid"""
+    def export_html(
+        self,
+        dag: DAG,
+        filepath: str,
+        context: Context | None = None,
+        title: str | None = None
+    ) -> None:
+        """Export interactive HTML with Mermaid, optionally with execution context"""
         renderer = MermaidRenderer()
-        mermaid_content = renderer.render_dag(dag)
+        mermaid_content = renderer.render_dag(dag, context=context)
         
+        # Enhanced HTML template with title and styling
         html_template = '''<!DOCTYPE html>
 <html>
 <head>
+    <title>{title}</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-    <script>mermaid.initialize({startOnLoad:true});</script>
+    <script>mermaid.initialize({{startOnLoad:true, theme:'default'}});</script>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }}
+        h1 {{
+            color: #333;
+        }}
+        .mermaid {{
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .metadata {{
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            font-size: 14px;
+        }}
+    </style>
 </head>
 <body>
+    <h1>{title}</h1>
     <div class="mermaid">
 {content}
     </div>
+    {metadata}
 </body>
 </html>'''
         
-        html_content = html_template.format(content=mermaid_content)
+        # Generate metadata section if context provided
+        metadata_html = ""
+        if context:
+            metadata_parts = []
+            if hasattr(context, 'metrics'):
+                if 'total_duration' in context.metrics:
+                    metadata_parts.append(f"Total Duration: {context.metrics['total_duration']:.2f}s")
+                if 'nodes_executed' in context.metrics:
+                    metadata_parts.append(f"Nodes Executed: {context.metrics['nodes_executed']}")
+            
+            if metadata_parts:
+                metadata_html = f'<div class="metadata">{" | ".join(metadata_parts)}</div>'
+        
+        html_content = html_template.format(
+            title=title or dag.name,
+            content=mermaid_content,
+            metadata=metadata_html
+        )
         
         with open(filepath, "w") as f:
             f.write(html_content)

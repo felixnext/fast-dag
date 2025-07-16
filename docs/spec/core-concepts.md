@@ -176,6 +176,7 @@ class DAG:
 2. **Topological Sort**: Determines execution order
 3. **Parallel Execution**: Identifies independent nodes
 4. **Entry Points**: Automatic or manual specification
+5. **Step-by-Step Execution**: apart from a `run` method there is also a `step` method that executes a single next step (by getting the context and returning the next context and results) - this should work for both DAG and FSM (for FSM this is esp useful and might be main operating mode)
 
 ### Connection Patterns
 
@@ -192,6 +193,31 @@ dag.connect("load_data", "process_data", output="data", input="raw_data")
 # Parallel branches
 load_data >> [process_a, process_b] >> merge_results
 ```
+
+It is worth noting here that easiest case is when node has single input and output. Then it is clear what the operator does.
+Otherwise the `>>` operator will automatically assume a list of named results (based on output_names provided)
+
+Example:
+
+```python
+@workflow.node(outputs=("msg", "result"))
+def send_notification(result: dict) -> tuple[str, dict]:
+    """Send customer notification"""
+    if result["status"] == "success":
+        msg = f"Order confirmed! Transaction: {result['transaction_id']}"
+    else:
+        msg = f"Order failed: {result['reason']}"
+    return msg, result
+```
+
+Then you can connect it like this:
+```python
+send_notification.msg >> process_payment
+send_notification.result >> send_notification
+[send_notification.result, reject_order.result] >> other_node
+```
+
+The list operator here combines multiple outputs. If there is a full node with multiple outputs in the list, that will be automatically expanded.
 
 ### Execution Modes
 

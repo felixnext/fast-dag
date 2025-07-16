@@ -366,16 +366,28 @@ def handle_error(node_name: str, error: Exception):
 ### Visualization
 
 ```python
-# Generate diagrams
+# Generate diagrams - basic
 mermaid_code = dag.to_mermaid()
 dag.save_mermaid("workflow.mmd")
+
+# Generate diagrams with execution context
+context = dag.run(inputs={...})
+mermaid_code = dag.to_mermaid(context=context)
+dag.save_mermaid("workflow_executed.mmd", context=context)
 
 # Graphviz
 dot = dag.to_graphviz()
 dag.save_graphviz("workflow.png", format="png")
 
-# With execution results
+# Graphviz with execution results
+dag.save_graphviz("workflow_executed.png", context=context, format="png")
+
+# HTML export with execution results
+dag.export_html("workflow_results.html", context=context, title="Execution Results")
+
+# Visualize with options
 dag.visualize(
+    context=context,
     show_results=True,
     show_timing=True,
     highlight_errors=True

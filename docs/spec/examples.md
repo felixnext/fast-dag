@@ -45,6 +45,10 @@ load_data >> clean_data >> analyze_data
 # Execute
 result = pipeline.run(filepath="sales_data.csv")
 print(result)
+# or
+next_context, result = pipeline.step(context=None, inputs={"filepath": "sales_data.csv"})
+next_context, result = pipeline.step(context=next_context)
+# ...
 ```
 
 ### Conditional Workflow

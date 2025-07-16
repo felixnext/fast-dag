@@ -78,6 +78,24 @@ python 04_invalid_dag.py --example 3
 python 04_invalid_dag.py --example 4
 ```
 
+### 5. Manual Node Creation (`05_manual_node_creation.py`)
+Examples of creating workflows without decorators:
+- Manual Node class instantiation
+- Different connection methods (explicit, method chaining, pipe operator)
+- Builder pattern for workflow construction
+- Function registry pattern for dynamic workflows
+
+```bash
+# Manual node instantiation
+python 05_manual_node_creation.py --mode manual
+
+# Builder pattern with method chaining
+python 05_manual_node_creation.py --mode builder
+
+# Function registry pattern
+python 05_manual_node_creation.py --mode registry --viz
+```
+
 ## Common Patterns
 
 ### Execution Modes

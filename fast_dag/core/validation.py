@@ -48,9 +48,14 @@ def find_disconnected_nodes(nodes: dict[str, Node]) -> set[str]:
     """Find nodes that are not connected to the main graph.
 
     A node is considered disconnected if it has no connections at all
-    (neither inputs nor outputs).
+    (neither inputs nor outputs) AND there are other nodes in the graph.
+    Single-node DAGs are considered valid.
     """
-    disconnected = set()
+    disconnected: set[str] = set()
+
+    # If there's only one node, it's not disconnected
+    if len(nodes) <= 1:
+        return disconnected
 
     for node_name, node in nodes.items():
         has_inputs = bool(node.input_connections)

@@ -40,16 +40,26 @@ class Node:
     timeout: float | None = None
 
     # Connection tracking
-    # Maps input name to (source_node, output_name)
+    # Maps input name to (source_node, output_name) for regular nodes
+    # For ANY/ALL nodes, this stores the last connection for compatibility
     input_connections: dict[str, tuple["Node", str]] = field(default_factory=dict)
     # Maps output name to list of (target_node, input_name)
     output_connections: dict[str, list[tuple["Node", str]]] = field(
+        default_factory=dict
+    )
+    # For ANY/ALL nodes: Maps input name to list of (source_node, output_name)
+    multi_input_connections: dict[str, list[tuple["Node", str]]] = field(
         default_factory=dict
     )
 
     # Runtime properties
     _has_context: bool | None = None
     _is_async: bool | None = None
+
+    # Lifecycle hooks
+    pre_execute: Callable[["Node", dict[str, Any]], None] | None = None
+    post_execute: Callable[["Node", dict[str, Any], Any], Any] | None = None
+    on_error: Callable[["Node", dict[str, Any], Exception], None] | None = None
 
     def __post_init__(self):
         """Initialize node properties from function introspection."""
@@ -174,7 +184,7 @@ class Node:
             self.output_connections[output] = []
 
         self.output_connections[output].append((target_node, input))
-        target_node.input_connections[input] = (self, output)
+        target_node.add_input_connection(input, self, output)
 
         return target_node
 
@@ -233,6 +243,15 @@ class Node:
         self, input_name: str, source_node: "Node", output_name: str
     ) -> None:
         """Add an input connection to this node."""
+        from .types import NodeType
+
+        # For ANY/ALL nodes, store multiple connections
+        if self.node_type in (NodeType.ANY, NodeType.ALL):
+            if input_name not in self.multi_input_connections:
+                self.multi_input_connections[input_name] = []
+            self.multi_input_connections[input_name].append((source_node, output_name))
+
+        # Always store in regular input_connections for compatibility
         self.input_connections[input_name] = (source_node, output_name)
 
     def add_output_connection(
@@ -260,11 +279,28 @@ class Node:
         if self.has_context and context is not None:
             kwargs["context"] = context
 
-        # Execute with retry logic if configured
-        if self.retry is not None and self.retry > 1:
-            return self._execute_with_retry(kwargs)
-        else:
-            return self._execute_once(kwargs)
+        # Call pre-execute hook if defined
+        if self.pre_execute is not None:
+            self.pre_execute(self, kwargs)
+
+        try:
+            # Execute with retry logic if configured
+            if self.retry is not None and self.retry > 1:
+                result = self._execute_with_retry(kwargs)
+            else:
+                result = self._execute_once(kwargs)
+
+            # Call post-execute hook if defined
+            if self.post_execute is not None:
+                result = self.post_execute(self, kwargs, result)
+
+            return result
+
+        except Exception as e:
+            # Call on-error hook if defined
+            if self.on_error is not None:
+                self.on_error(self, kwargs, e)
+            raise
 
     def _execute_with_retry(self, kwargs: dict[str, Any]) -> Any:
         """Execute with retry logic and exponential backoff."""
@@ -344,11 +380,28 @@ class Node:
         if self.has_context and context is not None:
             kwargs["context"] = context
 
-        # Execute with retry logic if configured
-        if self.retry is not None and self.retry > 1:
-            return await self._execute_with_retry_async(kwargs)
-        else:
-            return await self._execute_once_async(kwargs)
+        # Call pre-execute hook if defined
+        if self.pre_execute is not None:
+            self.pre_execute(self, kwargs)
+
+        try:
+            # Execute with retry logic if configured
+            if self.retry is not None and self.retry > 1:
+                result = await self._execute_with_retry_async(kwargs)
+            else:
+                result = await self._execute_once_async(kwargs)
+
+            # Call post-execute hook if defined
+            if self.post_execute is not None:
+                result = self.post_execute(self, kwargs, result)
+
+            return result
+
+        except Exception as e:
+            # Call on-error hook if defined
+            if self.on_error is not None:
+                self.on_error(self, kwargs, e)
+            raise
 
     async def _execute_with_retry_async(self, kwargs: dict[str, Any]) -> Any:
         """Execute async with retry logic and exponential backoff."""

@@ -78,3 +78,45 @@ def has_context_parameter(func: Callable) -> bool:
 def is_async_function(func: Callable) -> bool:
     """Check if a function is async."""
     return inspect.iscoroutinefunction(func)
+
+
+def get_function_return_type(func: Callable) -> type | None:
+    """Get the return type annotation of a function."""
+    try:
+        sig = inspect.signature(func)
+        if sig.return_annotation is not inspect.Parameter.empty:
+            # Try to get type hints which handles forward references better
+            try:
+                hints = get_type_hints(func)
+                return hints.get("return", sig.return_annotation)
+            except (NameError, AttributeError):
+                return sig.return_annotation
+    except Exception:
+        pass
+    return None
+
+
+def get_function_input_types(func: Callable) -> dict[str, type]:
+    """Get the input parameter types of a function."""
+    try:
+        sig = inspect.signature(func)
+        hints = get_type_hints(func)
+
+        input_types = {}
+        for name, param in sig.parameters.items():
+            # Skip special parameters
+            if name in ("self", "cls", "context"):
+                continue
+            # Skip *args and **kwargs
+            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue
+
+            # Get type from hints or annotation
+            if name in hints:
+                input_types[name] = hints[name]
+            elif param.annotation is not inspect.Parameter.empty:
+                input_types[name] = param.annotation
+
+        return input_types
+    except Exception:
+        return {}

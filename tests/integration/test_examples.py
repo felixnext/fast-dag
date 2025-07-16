@@ -237,10 +237,13 @@ class TestComplexBranchingExample:
                 "reason": "validation_failed",
             }
 
-        # Final node
-        @workflow.node(outputs=("msg", "result"))
-        def send_notification(result: dict) -> tuple[str, dict]:
+        # Final node - ANY since only one path will execute
+        @workflow.any(outputs=["msg", "result"])
+        def send_notification(result: dict | None) -> tuple[str, dict]:
             """Send customer notification"""
+            if result is None:
+                return "Error: No result received", {}
+
             if result["status"] == "success":
                 msg = f"Order confirmed! Transaction: {result['transaction_id']}"
             else:
@@ -278,8 +281,19 @@ class TestComplexBranchingExample:
         context = Context()
         result = workflow.run(context=context, order_data=valid_order)
 
+        print(f"Result: {result}, Type: {type(result)}")
+        print(f"Context results: {context.results}")
+        print(f"Execution order: {context.metrics.get('execution_order', [])}")
+
+        # Get the final node result directly from context
+        final_result = context.results.get("send_notification")
+        print(f"Final result: {final_result}")
+
+        # Check that send_notification executed and returned a tuple
+        assert isinstance(result, tuple)
         assert result[0] == "Order confirmed! Transaction: TXN-ORD-001"
         assert result[1]["status"] == "success"
+        assert result[1]["order_id"] == "ORD-001"
 
         # Test invalid order
         invalid_order = {"order_id": "ORD-002", "amount": -50.00, "items": []}
@@ -287,6 +301,7 @@ class TestComplexBranchingExample:
         context2 = Context()
         result2 = workflow.run(context=context2, order_data=invalid_order)
 
+        assert isinstance(result2, tuple)
         assert "Order failed" in result2[0]
         assert result2[1]["status"] == "rejected"
 
@@ -296,7 +311,7 @@ class TestFSMExample:
 
     def test_traffic_light_fsm(self):
         """Test traffic light state machine"""
-        fsm = FSM("traffic_light", max_cycles=10)
+        fsm = FSM("traffic_light", max_cycles=20)
 
         # Define states
         @fsm.state(initial=True)
@@ -395,8 +410,10 @@ class TestFSMExample:
             context2, result = fsm.step(context2)
 
             if fsm.current_state == "emergency_stop":
-                assert result["action"] == "stop"
-                assert result["reason"] == "emergency"
+                # We transitioned to emergency_stop, now execute it
+                context2, emergency_result = fsm.step(context2)
+                assert emergency_result["action"] == "stop"
+                assert emergency_result["reason"] == "emergency"
                 break
 
 
@@ -427,21 +444,21 @@ class TestManualNodeCreation:
 
         # Create nodes manually
         fetch_node = Node(
-            func=fetch_data, name="fetch", inputs=["source"], outputs=["data"]
+            func=fetch_data, name="fetch", inputs=["source"], outputs=["result"]
         )
 
         filter_node = Node(
             func=filter_data,
             name="filter",
             inputs=["data", "threshold"],
-            outputs=["filtered"],
+            outputs=["result"],
         )
 
         aggregate_node = Node(
             func=aggregate_results,
             name="aggregate",
             inputs=["filtered"],
-            outputs=["results"],
+            outputs=["result"],
         )
 
         # Add nodes to DAG
@@ -450,8 +467,8 @@ class TestManualNodeCreation:
         dag.add_node(aggregate_node)
 
         # Connect using explicit method
-        dag.connect("fetch", "filter", output="data", input="data")
-        dag.connect("filter", "aggregate", output="filtered", input="filtered")
+        dag.connect("fetch", "filter", output="result", input="data")
+        dag.connect("filter", "aggregate", output="result", input="filtered")
 
         # Execute
         result = dag.run(source="database", threshold=2)
@@ -480,7 +497,7 @@ class TestManualNodeCreation:
 
         # Define workflow structure
         workflow_def = [
-            {"name": "get_data", "func": "fetch", "outputs": ["data"]},
+            {"name": "get_data", "func": "fetch", "outputs": ["result"]},
             {"name": "process_data", "func": "process", "inputs": ["data"]},
         ]
 

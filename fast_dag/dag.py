@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .core.context import Context
-from .core.exceptions import InvalidNodeError, ValidationError
+from .core.exceptions import ExecutionError, InvalidNodeError, ValidationError
 from .core.node import Node
-from .core.types import NodeType
+from .core.types import ConditionalReturn, NodeType
 from .core.validation import find_cycles, find_disconnected_nodes
 
 
@@ -294,7 +294,7 @@ class DAG:
         context: Context | None = None,
         mode: str = "sequential",  # noqa: ARG002
         error_strategy: str = "stop",  # noqa: ARG002
-        **kwargs: Any,  # noqa: ARG002
+        **kwargs: Any,
     ) -> Any:
         """Execute the DAG.
 
@@ -307,19 +307,204 @@ class DAG:
         Returns:
             The result from the final node(s)
         """
-        # For now, just a placeholder
+        # Initialize context
         self.context = context or Context()
-        return None
+
+        # Validate DAG before execution
+        errors = self.validate(allow_disconnected=True)
+        if errors:
+            raise ValidationError(f"Cannot execute invalid DAG: {errors}")
+
+        # Get execution order
+        exec_order = self.execution_order
+
+        # Find nodes that need external inputs
+        entry_nodes = self.entry_points
+
+        # Execute nodes in topological order
+        last_result = None
+
+        for node_name in exec_order:
+            node = self.nodes[node_name]
+
+            # Prepare inputs for the node
+            node_inputs = {}
+
+            if node_name in entry_nodes:
+                # Entry node - get inputs from kwargs
+                for input_name in node.inputs or []:
+                    if input_name in kwargs:
+                        node_inputs[input_name] = kwargs[input_name]
+                    elif input_name == "context":
+                        continue  # Context is handled separately
+                    else:
+                        # Check if it's a no-argument function
+                        if node.inputs:
+                            raise ValueError(
+                                f"Entry node '{node_name}' missing required input: '{input_name}'"
+                            )
+            else:
+                # Non-entry node - get inputs from connections
+                skip_node = False
+                for input_name, (
+                    source_node,
+                    output_name,
+                ) in node.input_connections.items():
+                    source_name = source_node.name
+                    if source_name is None:
+                        raise ExecutionError("Source node has no name")
+                    if source_name not in self.context:
+                        raise ExecutionError(
+                            f"Node '{node_name}' requires result from '{source_name}' which hasn't executed"
+                        )
+
+                    source_result = self.context[source_name]
+
+                    # Handle output selection for multi-output nodes
+                    if isinstance(source_result, dict) and output_name in source_result:
+                        node_inputs[input_name] = source_result[output_name]
+                    elif isinstance(source_result, ConditionalReturn):
+                        # Handle conditional returns
+                        if (
+                            output_name == "true"
+                            and source_result.condition
+                            or output_name == "false"
+                            and not source_result.condition
+                        ):
+                            node_inputs[input_name] = source_result.value
+                        else:
+                            # Skip this node if on wrong branch
+                            skip_node = True
+                            break
+                    else:
+                        # Single output node
+                        node_inputs[input_name] = source_result
+
+                if skip_node:
+                    continue  # Skip to next node
+
+            # Execute the node
+            try:
+                if node.is_async:
+                    raise NotImplementedError(
+                        "Async execution not yet supported in sync run()"
+                    )
+
+                result = node.execute(node_inputs, context=self.context)
+
+                # Store result in context
+                self.context.set_result(node_name, result)
+                last_result = result
+
+            except Exception as e:
+                if error_strategy == "stop":
+                    raise ExecutionError(
+                        f"Error executing node '{node_name}': {e}"
+                    ) from e
+                elif error_strategy == "continue":
+                    # Log error and continue
+                    self.context.metadata[f"{node_name}_error"] = str(e)
+                    continue
+                else:
+                    raise ValueError(f"Unknown error strategy: {error_strategy}") from e
+
+        # Return the last result (or could return results from all sink nodes)
+        return last_result
 
     async def run_async(
         self,
         context: Context | None = None,
-        **kwargs: Any,  # noqa: ARG002
+        **kwargs: Any,
     ) -> Any:
         """Execute the DAG asynchronously."""
-        # Placeholder
+        # Initialize context
         self.context = context or Context()
-        return None
+
+        # Validate DAG before execution
+        errors = self.validate(allow_disconnected=True)
+        if errors:
+            raise ValidationError(f"Cannot execute invalid DAG: {errors}")
+
+        # Get execution order
+        exec_order = self.execution_order
+
+        # Find nodes that need external inputs
+        entry_nodes = self.entry_points
+
+        # Execute nodes in topological order
+        last_result = None
+
+        for node_name in exec_order:
+            node = self.nodes[node_name]
+
+            # Prepare inputs for the node
+            node_inputs = {}
+
+            if node_name in entry_nodes:
+                # Entry node - get inputs from kwargs
+                for input_name in node.inputs or []:
+                    if input_name in kwargs:
+                        node_inputs[input_name] = kwargs[input_name]
+                    elif input_name == "context":
+                        continue  # Context is handled separately
+                    else:
+                        # Check if it's a no-argument function
+                        if node.inputs:
+                            raise ValueError(
+                                f"Entry node '{node_name}' missing required input: '{input_name}'"
+                            )
+            else:
+                # Non-entry node - get inputs from connections
+                skip_node = False
+                for input_name, (
+                    source_node,
+                    output_name,
+                ) in node.input_connections.items():
+                    source_name = source_node.name
+                    if source_name is None:
+                        raise ExecutionError("Source node has no name")
+                    if source_name not in self.context:
+                        raise ExecutionError(
+                            f"Node '{node_name}' requires result from '{source_name}' which hasn't executed"
+                        )
+
+                    source_result = self.context[source_name]
+
+                    # Handle output selection for multi-output nodes
+                    if isinstance(source_result, dict) and output_name in source_result:
+                        node_inputs[input_name] = source_result[output_name]
+                    elif isinstance(source_result, ConditionalReturn):
+                        # Handle conditional returns
+                        if (
+                            output_name == "true"
+                            and source_result.condition
+                            or output_name == "false"
+                            and not source_result.condition
+                        ):
+                            node_inputs[input_name] = source_result.value
+                        else:
+                            # Skip this node if on wrong branch
+                            skip_node = True
+                            break
+                    else:
+                        # Single output node
+                        node_inputs[input_name] = source_result
+
+                if skip_node:
+                    continue  # Skip to next node
+
+            # Execute the node
+            if node.is_async:
+                result = await node.execute_async(node_inputs, context=self.context)
+            else:
+                result = node.execute(node_inputs, context=self.context)
+
+            # Store result in context
+            self.context.set_result(node_name, result)
+            last_result = result
+
+        # Return the last result
+        return last_result
 
     def get(self, node_name: str, default: Any = None) -> Any:
         """Get a result from the context."""
@@ -338,3 +523,10 @@ class DAG:
         if self.context is None:
             return False
         return key in self.context
+
+    @property
+    def results(self) -> dict[str, Any]:
+        """Get all execution results."""
+        if self.context is None:
+            return {}
+        return self.context.results

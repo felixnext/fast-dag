@@ -11,7 +11,8 @@ Demonstrates:
 
 import argparse
 import asyncio
-from fast_dag import DAG, ConditionalReturn, DAGRunner, DAGContext
+
+from fast_dag import DAG, ConditionalReturn, DAGContext, DAGRunner
 
 
 def main():

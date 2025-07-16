@@ -2,10 +2,12 @@
 Unit tests for Node class and node creation functionality.
 """
 
-import pytest
 import asyncio
 from typing import Any
-from fast_dag import Node, NodeType, ConditionalReturn, FSMReturn
+
+import pytest
+
+from fast_dag import ConditionalReturn, FSMReturn, Node, NodeType
 
 
 class TestNodeCreation:

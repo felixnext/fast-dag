@@ -10,6 +10,7 @@ Demonstrates various validation errors:
 """
 
 import argparse
+
 from fast_dag import DAG, ConditionalReturn
 
 

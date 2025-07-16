@@ -12,6 +12,7 @@ A basic data processing pipeline that demonstrates:
 
 import argparse
 import asyncio
+
 from fast_dag import DAG, DAGRunner
 
 

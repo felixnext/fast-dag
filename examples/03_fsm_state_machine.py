@@ -11,7 +11,8 @@ Demonstrates:
 """
 
 import argparse
-from fast_dag import FSM, FSMReturn, FSMContext
+
+from fast_dag import FSM, FSMContext, FSMReturn
 
 
 def main():

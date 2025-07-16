@@ -3,6 +3,7 @@ Unit tests for connection patterns and operators.
 """
 
 import pytest
+
 from fast_dag import DAG, ConditionalReturn
 
 
@@ -388,7 +389,7 @@ class TestAnyNode:
         [dag.nodes["fail1"], dag.nodes["fail2"]] >> dag.nodes["any_input"]
 
         # Should raise error
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             dag.run(error_strategy="continue")
 
 

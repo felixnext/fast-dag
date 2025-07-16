@@ -2,8 +2,9 @@
 Shared pytest fixtures and configuration for fast-dag tests.
 """
 
-import pytest
 from typing import Any
+
+import pytest
 
 
 # Shared test functions for use in tests

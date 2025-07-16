@@ -11,7 +11,8 @@ Demonstrates creating workflows without decorators:
 """
 
 import argparse
-from fast_dag import DAG, Node, NodeType, ConditionalReturn
+
+from fast_dag import DAG, ConditionalReturn, Node, NodeType
 
 
 # Standalone functions (not decorated)

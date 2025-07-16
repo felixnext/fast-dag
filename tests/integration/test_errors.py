@@ -4,15 +4,16 @@ Based on example 04 - invalid DAG scenarios.
 """
 
 import pytest
+
 from fast_dag import (
     DAG,
     FSM,
     Context,
-    FSMContext,
-    ValidationError,
     CycleError,
-    MissingConnectionError,
+    FSMContext,
     InvalidNodeError,
+    MissingConnectionError,
+    ValidationError,
 )
 
 
@@ -371,7 +372,7 @@ class TestRuntimeErrors:
             return x + own_result
 
         # This creates a runtime circular dependency
-        with pytest.raises(Exception):
+        with pytest.raises((RuntimeError, RecursionError, ValueError)):
             dag.run(x=10)
 
 

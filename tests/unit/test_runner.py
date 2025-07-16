@@ -2,9 +2,11 @@
 Unit tests for DAGRunner and execution strategies.
 """
 
-import pytest
 import asyncio
-from fast_dag import DAG, DAGRunner, ExecutionMode, Context
+
+import pytest
+
+from fast_dag import DAG, Context, DAGRunner, ExecutionMode
 
 
 class TestRunnerCreation:
@@ -315,7 +317,7 @@ class TestErrorHandling:
 
         runner = DAGRunner(dag, error_strategy="stop")
 
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, RuntimeError)):
             runner.run()
 
         # c should not execute after b fails

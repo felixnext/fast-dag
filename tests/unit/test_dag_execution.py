@@ -2,9 +2,11 @@
 Unit tests for DAG execution functionality.
 """
 
-import pytest
 import asyncio
-from fast_dag import DAG, Context, ConditionalReturn, ExecutionError
+
+import pytest
+
+from fast_dag import DAG, ConditionalReturn, Context, ExecutionError
 
 
 class TestBasicExecution:

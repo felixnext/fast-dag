@@ -3,7 +3,8 @@ Unit tests for DAG class and basic workflow functionality.
 """
 
 import pytest
-from fast_dag import DAG, Node, ConditionalReturn, ValidationError
+
+from fast_dag import DAG, ConditionalReturn, Node, ValidationError
 
 
 class TestDAGCreation:

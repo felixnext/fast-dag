@@ -3,16 +3,17 @@ Integration tests based on the example workflows.
 """
 
 import asyncio
+
 from fast_dag import (
     DAG,
     FSM,
-    Node,
-    Context,
-    FSMContext,
     ConditionalReturn,
-    FSMReturn,
+    Context,
     DAGRunner,
+    FSMContext,
+    FSMReturn,
     FunctionRegistry,
+    Node,
 )
 
 
@@ -368,7 +369,7 @@ class TestFSMExample:
         context = FSMContext()
         results = []
 
-        for i in range(12):
+        for _ in range(12):
             context, result = fsm.step(context)
             results.append(result)
 

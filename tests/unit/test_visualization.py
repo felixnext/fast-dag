@@ -2,7 +2,7 @@
 Unit tests for visualization functionality.
 """
 
-from fast_dag import DAG, FSM, FSMContext, ConditionalReturn, FSMReturn
+from fast_dag import DAG, FSM, ConditionalReturn, FSMContext, FSMReturn
 
 
 class TestMermaidVisualization:

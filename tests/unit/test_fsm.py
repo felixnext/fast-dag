@@ -2,8 +2,10 @@
 Unit tests for FSM (Finite State Machine) functionality.
 """
 
-import pytest
 import asyncio
+
+import pytest
+
 from fast_dag import FSM, FSMContext, FSMReturn
 
 

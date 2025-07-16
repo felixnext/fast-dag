@@ -1300,3 +1300,55 @@ class DAG:
 
             self._runner = DAGRunner(self)
         return self._runner
+
+    def visualize(
+        self,
+        backend: str = "mermaid",
+        options: Any = None,
+        filename: str | None = None,
+        format: str = "png",
+    ) -> str:
+        """Visualize the DAG using the specified backend.
+
+        Args:
+            backend: Visualization backend ("mermaid" or "graphviz")
+            options: VisualizationOptions instance
+            filename: If provided, save the visualization to file
+            format: Output format (png, svg, pdf, etc.)
+
+        Returns:
+            String representation of the visualization
+        """
+        try:
+            from .visualization import (
+                GraphvizBackend,
+                MermaidBackend,
+                VisualizationBackend,
+                VisualizationOptions,
+            )
+        except ImportError as e:
+            raise ImportError(
+                "Visualization requires optional dependencies. "
+                "Install with: pip install fast-dag[viz]"
+            ) from e
+
+        # Create options if not provided
+        if options is None:
+            options = VisualizationOptions()
+
+        # Select backend
+        if backend.lower() == "mermaid":
+            viz: VisualizationBackend = MermaidBackend(options)
+        elif backend.lower() == "graphviz":
+            viz = GraphvizBackend(options)
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+
+        # Generate visualization
+        content = viz.visualize_dag(self)
+
+        # Save if filename provided
+        if filename:
+            viz.save(content, filename, format)
+
+        return content

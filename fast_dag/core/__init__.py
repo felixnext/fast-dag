@@ -1,30 +1,20 @@
-"""Fast DAG is a library for building and executing DAGs in Python.
+"""Core components of fast-dag."""
 
-Copyright (c) 2025 Felix Geilert
-"""
-
-__version__ = "0.1.0"
-
-from .core import (
-    ConditionalReturn,
-    Context,
+from .context import Context, FSMContext
+from .exceptions import (
     CycleError,
     DisconnectedNodeError,
     ExecutionError,
     FastDAGError,
-    FSMContext,
-    FSMReturn,
     InvalidNodeError,
     MissingConnectionError,
-    Node,
-    NodeType,
-    SelectReturn,
     TimeoutError,
     ValidationError,
 )
+from .node import Node
+from .types import ConditionalReturn, FSMReturn, NodeType, SelectReturn
 
 __all__ = [
-    "__version__",
     "Context",
     "FSMContext",
     "Node",

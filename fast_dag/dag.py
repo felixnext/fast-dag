@@ -95,10 +95,24 @@ class DAG:
         else:
             return decorator(func)  # type: ignore
 
-    def add_node(self, node: Node) -> None:
-        """Add a node to the DAG."""
-        if not isinstance(node, Node):
-            raise InvalidNodeError(f"Expected Node, got {type(node)}")
+    def add_node(self, node_or_name: Node | str, func: Callable | None = None) -> "DAG":
+        """Add a node to the DAG.
+
+        Can be called as:
+        - dag.add_node(node)  # With a Node object
+        - dag.add_node("name", func)  # With name and function
+
+        Returns self for chaining.
+        """
+        if isinstance(node_or_name, Node):
+            node = node_or_name
+        elif isinstance(node_or_name, str) and func is not None:
+            # Create node from name and function
+            node = Node(func=func, name=node_or_name)
+        else:
+            raise InvalidNodeError(
+                "add_node requires either a Node object or (name, func) arguments"
+            )
 
         if node.name is None:
             raise ValueError("Node must have a name")
@@ -108,6 +122,7 @@ class DAG:
 
         self.nodes[node.name] = node
         self._invalidate_cache()
+        return self  # For chaining
 
     def connect(
         self,

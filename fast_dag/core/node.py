@@ -61,6 +61,11 @@ class Node:
     post_execute: Callable[["Node", dict[str, Any], Any], Any] | None = None
     on_error: Callable[["Node", dict[str, Any], Exception], None] | None = None
 
+    # Caching configuration
+    cached: bool = False
+    cache_backend: str = "memory"
+    cache_ttl: float | None = None
+
     def __post_init__(self):
         """Initialize node properties from function introspection."""
         # Set name from function if not provided
@@ -272,6 +277,26 @@ class Node:
         Returns:
             The result of executing the node's function
         """
+        # Check cache if enabled
+        if self.cached:
+            from .cache import generate_cache_key, get_cache
+
+            cache = get_cache(self.cache_backend)
+            cache_key = generate_cache_key(self.name or "", inputs)
+
+            # Try to get from cache
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                # Update context metrics if available
+                if context is not None and hasattr(context, "metrics"):
+                    if "cache_hits" not in context.metrics:
+                        context.metrics["cache_hits"] = {}
+                    context.metrics["cache_hits"][self.name or ""] = (
+                        context.metrics.get("cache_hits", {}).get(self.name or "", 0)
+                        + 1
+                    )
+                return cached_result
+
         # Build kwargs from inputs
         kwargs = dict(inputs)
 
@@ -293,6 +318,18 @@ class Node:
             # Call post-execute hook if defined
             if self.post_execute is not None:
                 result = self.post_execute(self, kwargs, result)
+
+            # Store in cache if enabled
+            if self.cached:
+                cache.set(cache_key, result, ttl=self.cache_ttl)
+                # Update context metrics if available
+                if context is not None and hasattr(context, "metrics"):
+                    if "cache_misses" not in context.metrics:
+                        context.metrics["cache_misses"] = {}
+                    context.metrics["cache_misses"][self.name or ""] = (
+                        context.metrics.get("cache_misses", {}).get(self.name or "", 0)
+                        + 1
+                    )
 
             return result
 
@@ -373,6 +410,26 @@ class Node:
         if not self.is_async:
             raise RuntimeError(f"Node '{self.name}' is not async")
 
+        # Check cache if enabled
+        if self.cached:
+            from .cache import generate_cache_key, get_cache
+
+            cache = get_cache(self.cache_backend)
+            cache_key = generate_cache_key(self.name or "", inputs)
+
+            # Try to get from cache
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                # Update context metrics if available
+                if context is not None and hasattr(context, "metrics"):
+                    if "cache_hits" not in context.metrics:
+                        context.metrics["cache_hits"] = {}
+                    context.metrics["cache_hits"][self.name or ""] = (
+                        context.metrics.get("cache_hits", {}).get(self.name or "", 0)
+                        + 1
+                    )
+                return cached_result
+
         # Build kwargs from inputs
         kwargs = dict(inputs)
 
@@ -394,6 +451,18 @@ class Node:
             # Call post-execute hook if defined
             if self.post_execute is not None:
                 result = self.post_execute(self, kwargs, result)
+
+            # Store in cache if enabled
+            if self.cached:
+                cache.set(cache_key, result, ttl=self.cache_ttl)
+                # Update context metrics if available
+                if context is not None and hasattr(context, "metrics"):
+                    if "cache_misses" not in context.metrics:
+                        context.metrics["cache_misses"] = {}
+                    context.metrics["cache_misses"][self.name or ""] = (
+                        context.metrics.get("cache_misses", {}).get(self.name or "", 0)
+                        + 1
+                    )
 
             return result
 

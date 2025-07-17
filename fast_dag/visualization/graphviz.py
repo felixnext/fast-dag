@@ -32,6 +32,10 @@ class GraphvizBackend(VisualizationBackend):
                 attrs.append("shape=trapezium")
             elif node.node_type in (NodeType.ANY, NodeType.ALL):
                 attrs.append("shape=ellipse")
+            elif node.node_type == NodeType.DAG:
+                attrs.append("shape=box3d")  # 3D box for nested DAG
+            elif node.node_type == NodeType.FSM:
+                attrs.append("shape=doublecircle")  # Double circle for FSM
             else:
                 attrs.append("shape=box")
 

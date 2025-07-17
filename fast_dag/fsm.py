@@ -740,3 +740,68 @@ class FSM(DAG):
             viz.save(content, filename, format)
 
         return content
+
+    def save(
+        self, filename: str, format: str = "json", serializer: str | None = None
+    ) -> None:
+        """Save the FSM to a file.
+
+        Args:
+            filename: File path to save to
+            format: Serialization format (json, yaml, msgpack)
+            serializer: Serializer name (defaults to registered default)
+        """
+        from .serialization import SerializerRegistry
+
+        ser = SerializerRegistry.get(serializer)
+        data = ser.serialize(self, format=format)
+
+        # Write to file
+        if format == "msgpack":
+            mode = "wb"
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+        else:
+            mode = "w"
+            if isinstance(data, bytes):
+                data = data.decode("utf-8")
+
+        with open(filename, mode) as f:
+            f.write(data)
+
+    @classmethod
+    def load(
+        cls, filename: str, format: str | None = None, serializer: str | None = None
+    ) -> "FSM":
+        """Load an FSM from a file.
+
+        Args:
+            filename: File path to load from
+            format: Serialization format (auto-detected if None)
+            serializer: Serializer name (defaults to registered default)
+
+        Returns:
+            Loaded FSM instance
+        """
+        from .serialization import SerializerRegistry
+
+        # Auto-detect format from extension
+        if format is None:
+            if filename.endswith(".json"):
+                format = "json"
+            elif filename.endswith(".yaml") or filename.endswith(".yml"):
+                format = "yaml"
+            elif filename.endswith(".msgpack") or filename.endswith(".mp"):
+                format = "msgpack"
+            else:
+                format = "json"  # Default
+
+        # Read file
+        mode = "rb" if format == "msgpack" else "r"
+
+        with open(filename, mode) as f:
+            data = f.read()
+
+        # Deserialize
+        ser = SerializerRegistry.get(serializer)
+        return ser.deserialize(data, target_type=cls, format=format)

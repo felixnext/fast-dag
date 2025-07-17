@@ -208,6 +208,60 @@ class DAG:
         else:
             return decorator(func)  # type: ignore
 
+    def cached_node(
+        self,
+        func: Callable | None = None,
+        *,
+        name: str | None = None,
+        inputs: list[str] | None = None,
+        outputs: list[str] | None = None,
+        description: str | None = None,
+        retry: int | None = None,
+        retry_delay: float | None = None,
+        timeout: float | None = None,
+        cache_backend: str = "memory",
+        cache_ttl: float | None = None,
+    ) -> Callable:
+        """Decorator to add a cached node to the DAG.
+
+        Cached nodes store their results to avoid re-computation.
+
+        Args:
+            func: The function to wrap as a node
+            name: Override the node name (defaults to function name)
+            inputs: Override input parameter names
+            outputs: Override output names
+            description: Node description
+            retry: Number of retry attempts on failure
+            retry_delay: Initial delay between retries (exponential backoff)
+            timeout: Maximum execution time in seconds
+            cache_backend: Cache backend to use (default: "memory")
+            cache_ttl: Cache time-to-live in seconds
+        """
+
+        def decorator(f: Callable) -> Node:
+            node = Node(
+                func=f,
+                name=name,
+                inputs=inputs,
+                outputs=outputs,
+                description=description,
+                node_type=NodeType.STANDARD,
+                retry=retry,
+                retry_delay=retry_delay,
+                timeout=timeout,
+                cached=True,
+                cache_backend=cache_backend,
+                cache_ttl=cache_ttl,
+            )
+            self.add_node(node)
+            return node
+
+        if func is None:
+            return decorator  # type: ignore
+        else:
+            return decorator(func)  # type: ignore
+
     def add_node(self, node_or_name: Node | str, func: Callable | None = None) -> "DAG":
         """Add a node to the DAG.
 
@@ -244,6 +298,100 @@ class DAG:
         self.nodes[node.name] = node
         self._invalidate_cache()
         return self  # For chaining
+
+    def add_dag(
+        self,
+        name: str,
+        dag: "DAG",
+        inputs: dict[str, str] | None = None,
+        outputs: dict[str, str] | None = None,
+        description: str | None = None,
+    ) -> "DAG":
+        """Add a nested DAG as a node.
+
+        Args:
+            name: Name for the nested DAG node
+            dag: The DAG to nest
+            inputs: Mapping from DAG input names to node input names
+            outputs: Mapping from DAG output names to node output names
+            description: Optional description
+
+        Returns:
+            Self for chaining
+        """
+        from .core.nested import create_dag_node
+
+        # Convert input/output mappings to lists
+        node_inputs = list(inputs.values()) if inputs else None
+        node_outputs = list(outputs.values()) if outputs else None
+
+        # Create the DAG node
+        dag_node = create_dag_node(
+            dag=dag,
+            name=name,
+            inputs=node_inputs,
+            outputs=node_outputs,
+            description=description,
+        )
+
+        # Store the mappings in the node's metadata for execution
+        if inputs:
+            dag_node.metadata["input_mapping"] = inputs
+        if outputs:
+            dag_node.metadata["output_mapping"] = outputs
+
+        # Add the node
+        return self.add_node(dag_node)
+
+    def add_fsm(
+        self,
+        name: str,
+        fsm: Any,  # Will be FSM type but avoid circular import
+        inputs: dict[str, str] | None = None,
+        outputs: dict[str, str] | None = None,
+        description: str | None = None,
+    ) -> "DAG":
+        """Add a nested FSM as a node.
+
+        Args:
+            name: Name for the nested FSM node
+            fsm: The FSM to nest
+            inputs: Mapping from FSM input names to node input names
+            outputs: Mapping from FSM output names to node output names
+            description: Optional description
+
+        Returns:
+            Self for chaining
+        """
+        from .core.nested import create_fsm_node
+
+        # Import here to avoid circular imports
+        from .fsm import FSM
+
+        if not isinstance(fsm, FSM):
+            raise TypeError("fsm must be an FSM instance")
+
+        # Convert input/output mappings to lists
+        node_inputs = list(inputs.values()) if inputs else None
+        node_outputs = list(outputs.values()) if outputs else None
+
+        # Create the FSM node
+        fsm_node = create_fsm_node(
+            fsm=fsm,
+            name=name,
+            inputs=node_inputs,
+            outputs=node_outputs,
+            description=description,
+        )
+
+        # Store the mappings in the node's metadata for execution
+        if inputs:
+            fsm_node.metadata["input_mapping"] = inputs
+        if outputs:
+            fsm_node.metadata["output_mapping"] = outputs
+
+        # Add the node
+        return self.add_node(fsm_node)
 
     def set_node_hooks(
         self,
@@ -1162,9 +1310,43 @@ class DAG:
         return self.context.get(node_name, default)
 
     def __getitem__(self, key: str) -> Any:
-        """Dict-like access to results."""
+        """Dict-like access to results with support for nested access.
+
+        Examples:
+            dag["node_name"]  # Get result from node
+            dag["nested.step1"]  # Get result from step1 inside nested workflow
+        """
         if self.context is None:
             raise KeyError(f"No execution context available, key '{key}' not found")
+
+        # Check for nested access pattern
+        if "." in key:
+            parts = key.split(".", 1)
+            parent_name = parts[0]
+            nested_key = parts[1]
+
+            # Get the parent node
+            if parent_name not in self.nodes:
+                raise KeyError(f"Node '{parent_name}' not found")
+
+            parent_node = self.nodes[parent_name]
+
+            # Check if it's a nested workflow node
+            if parent_node.node_type in (NodeType.DAG, NodeType.FSM):
+                # Get the nested workflow
+                if hasattr(parent_node, "dag"):
+                    nested_workflow = parent_node.dag
+                elif hasattr(parent_node, "fsm"):
+                    nested_workflow = parent_node.fsm
+                else:
+                    raise KeyError(f"Node '{parent_name}' is not a nested workflow")
+
+                # Access the nested result
+                return nested_workflow[nested_key]
+            else:
+                raise KeyError(f"Node '{parent_name}' is not a nested workflow node")
+
+        # Regular access
         return self.context[key]
 
     def __contains__(self, key: str) -> bool:
@@ -1352,3 +1534,68 @@ class DAG:
             viz.save(content, filename, format)
 
         return content
+
+    def save(
+        self, filename: str, format: str = "json", serializer: str | None = None
+    ) -> None:
+        """Save the DAG to a file.
+
+        Args:
+            filename: File path to save to
+            format: Serialization format (json, yaml, msgpack)
+            serializer: Serializer name (defaults to registered default)
+        """
+        from .serialization import SerializerRegistry
+
+        ser = SerializerRegistry.get(serializer)
+        data = ser.serialize(self, format=format)
+
+        # Write to file
+        if format == "msgpack":
+            mode = "wb"
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+        else:
+            mode = "w"
+            if isinstance(data, bytes):
+                data = data.decode("utf-8")
+
+        with open(filename, mode) as f:
+            f.write(data)
+
+    @classmethod
+    def load(
+        cls, filename: str, format: str | None = None, serializer: str | None = None
+    ) -> "DAG":
+        """Load a DAG from a file.
+
+        Args:
+            filename: File path to load from
+            format: Serialization format (auto-detected if None)
+            serializer: Serializer name (defaults to registered default)
+
+        Returns:
+            Loaded DAG instance
+        """
+        from .serialization import SerializerRegistry
+
+        # Auto-detect format from extension
+        if format is None:
+            if filename.endswith(".json"):
+                format = "json"
+            elif filename.endswith(".yaml") or filename.endswith(".yml"):
+                format = "yaml"
+            elif filename.endswith(".msgpack") or filename.endswith(".mp"):
+                format = "msgpack"
+            else:
+                format = "json"  # Default
+
+        # Read file
+        mode = "rb" if format == "msgpack" else "r"
+
+        with open(filename, mode) as f:
+            data = f.read()
+
+        # Deserialize
+        ser = SerializerRegistry.get(serializer)
+        return ser.deserialize(data, target_type=cls, format=format)

@@ -51,7 +51,7 @@ class TestFSMBasicExecution:
 
         @fsm.state(initial=True)
         def check(context: FSMContext) -> FSMReturn:
-            value = context.data.get("value", 0)
+            value = context.metadata.get("value", 0)
             if value > 0:
                 return FSMReturn(next_state="positive_handler", value="positive")
             else:
@@ -67,14 +67,14 @@ class TestFSMBasicExecution:
 
         # Test positive path
         context = FSMContext()
-        context.data = {"value": 5}
+        context.metadata["value"] = 5
         result = fsm.run(context=context)
         assert result == "handled_positive"
 
         # Test negative path
         fsm.reset()
         context = FSMContext()
-        context.data = {"value": -5}
+        context.metadata["value"] = -5
         result = fsm.run(context=context)
         assert result == "handled_negative"
 

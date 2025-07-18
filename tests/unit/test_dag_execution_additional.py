@@ -595,7 +595,7 @@ class TestExecutionEdgeCases:
         @dag.node
         def bad_node() -> int:
             # This will cause a ValueError in the runner
-            return "not an int"  # Type mismatch
+            return 42  # Return valid int
 
         # Mock the runner to raise ValueError
         with patch.object(dag, "_get_runner") as mock_runner:

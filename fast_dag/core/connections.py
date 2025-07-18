@@ -1,9 +1,10 @@
 """Connection utilities and special connection types."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .node import Node
+    # Use Any to avoid circular imports
+    Node = Any
 
 
 class ConditionalOutputProxy:

@@ -1,12 +1,14 @@
 """msgspec-based serializer implementation."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..core.context import Context, FSMContext
 from ..core.node import Node
 from ..core.types import NodeType
-from ..dag import DAG
-from ..fsm import FSM
+
+if TYPE_CHECKING:
+    from ..dag import DAG
+    from ..fsm import FSM
 from .base import Serializer
 from .registry import FunctionRegistry, get_function_path
 from .types import (
@@ -41,10 +43,10 @@ class MsgspecSerializer(Serializer):
         """Serialize an object to the specified format."""
         # Convert to serializable type
         serializable: SerializableDAG | SerializableFSM | SerializableContext
-        if isinstance(obj, FSM):
+        if obj.__class__.__name__ == "FSM":
             # Check FSM before DAG since FSM is a subclass of DAG
             serializable = self._fsm_to_serializable(obj)
-        elif isinstance(obj, DAG):
+        elif obj.__class__.__name__ == "DAG":
             serializable = self._dag_to_serializable(obj)
         elif isinstance(obj, Context):
             serializable = self._context_to_serializable(obj)
@@ -88,10 +90,10 @@ class MsgspecSerializer(Serializer):
             raise ValueError(f"Unknown format: {format}")
 
         # Convert to target type
-        if target_type == DAG:
+        if target_type.__name__ == "DAG":
             serializable_dag = msgspec.convert(raw, SerializableDAG)
             return self._serializable_to_dag(serializable_dag)
-        elif target_type == FSM:
+        elif target_type.__name__ == "FSM":
             serializable_fsm = msgspec.convert(raw, SerializableFSM)
             return self._serializable_to_fsm(serializable_fsm)
         elif target_type == Context:
@@ -103,7 +105,7 @@ class MsgspecSerializer(Serializer):
         else:
             raise TypeError(f"Cannot deserialize to type: {target_type}")
 
-    def _dag_to_serializable(self, dag: DAG) -> SerializableDAG:
+    def _dag_to_serializable(self, dag: "DAG") -> SerializableDAG:
         """Convert a DAG to its serializable representation."""
         nodes = []
         connections = []
@@ -144,8 +146,11 @@ class MsgspecSerializer(Serializer):
             metadata=dag.metadata,
         )
 
-    def _serializable_to_dag(self, serializable: SerializableDAG) -> DAG:
+    def _serializable_to_dag(self, serializable: SerializableDAG) -> "DAG":
         """Convert a serializable representation to a DAG."""
+        # Import here to avoid circular imports
+        from ..dag import DAG
+
         dag = DAG(
             name=serializable.name,
             description=serializable.description,
@@ -174,13 +179,13 @@ class MsgspecSerializer(Serializer):
             dag.connect(
                 conn.source,
                 conn.target,
-                output=conn.output,
+                output=conn.output or "result",
                 input=conn.input,
             )
 
         return dag
 
-    def _fsm_to_serializable(self, fsm: FSM) -> SerializableFSM:
+    def _fsm_to_serializable(self, fsm: "FSM") -> SerializableFSM:
         """Convert an FSM to its serializable representation."""
         # Get base DAG serializable
         dag_serializable = self._dag_to_serializable(fsm)
@@ -197,8 +202,11 @@ class MsgspecSerializer(Serializer):
             metadata=dag_serializable.metadata,
         )
 
-    def _serializable_to_fsm(self, serializable: SerializableFSM) -> FSM:
+    def _serializable_to_fsm(self, serializable: SerializableFSM) -> "FSM":
         """Convert a serializable representation to an FSM."""
+        # Import here to avoid circular imports
+        from ..fsm import FSM
+
         fsm = FSM(
             name=serializable.name,
             description=serializable.description,
@@ -231,7 +239,7 @@ class MsgspecSerializer(Serializer):
             fsm.connect(
                 conn.source,
                 conn.target,
-                output=conn.output,
+                output=conn.output or "result",
                 input=conn.input,
             )
 
@@ -262,7 +270,9 @@ class MsgspecSerializer(Serializer):
             metadata=context.metadata,
             metrics=context.metrics,
             state_history=context.state_history,
-            cycle_results=context.cycle_results,
+            cycle_results=context.cycle_results._by_state
+            if hasattr(context.cycle_results, "_by_state")
+            else {},
             cycle_count=context.cycle_count,
         )
 
@@ -275,6 +285,14 @@ class MsgspecSerializer(Serializer):
         context.metadata = serializable.metadata
         context.metrics = serializable.metrics
         context.state_history = serializable.state_history
-        context.cycle_results = serializable.cycle_results
+        # Convert dict back to CycleResults if needed
+        from ..core.context import CycleResults
+
+        if isinstance(serializable.cycle_results, dict):
+            cycle_results = CycleResults()
+            cycle_results._by_state = serializable.cycle_results
+            context.cycle_results = cycle_results
+        else:
+            context.cycle_results = serializable.cycle_results
         context.cycle_count = serializable.cycle_count
         return context

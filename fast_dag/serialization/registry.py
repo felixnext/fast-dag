@@ -87,4 +87,9 @@ def get_function_path(func: Callable) -> str:
     """Get the full path to a function for serialization."""
     module = func.__module__
     qualname = func.__qualname__
+
+    # Check for lambda functions which cannot be serialized
+    if "<lambda>" in qualname:
+        raise ValueError(f"Lambda functions cannot be serialized: {func}")
+
     return f"{module}.{qualname}"

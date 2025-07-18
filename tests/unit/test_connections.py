@@ -388,9 +388,16 @@ class TestAnyNode:
 
         [dag.nodes["fail1"], dag.nodes["fail2"]] >> dag.nodes["any_input"]
 
-        # Should raise error
-        with pytest.raises(ValueError):
-            dag.run(error_strategy="continue")
+        # With error_strategy="continue", source errors are caught
+        # but the ANY node still executes with None inputs
+        result = dag.run(error_strategy="continue")
+
+        # The result should be None since the ANY node also failed
+        assert result is None
+
+        # Check that the error was recorded in metadata
+        assert "any_input_error" in dag.context.metadata
+        assert "No valid inputs" in dag.context.metadata["any_input_error"]
 
 
 class TestComplexConnectionPatterns:

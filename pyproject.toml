@@ -165,4 +165,5 @@ packages = ["fast_dag"]
 dev = [
     "build>=1.2.2.post1",
     "twine>=6.1.0",
+    "types-pyyaml>=6.0.12.20250516",
 ]

@@ -35,7 +35,11 @@ class DAGNode(Node):
         # Create a function that captures these references
         def make_execute_function(dag, metadata, outputs):
             # Build the function dynamically with the right signature
-            param_names = self.inputs or []
+            # Handle both list and dict inputs
+            if isinstance(self.inputs, dict):
+                param_names = list(self.inputs.keys())
+            else:
+                param_names = self.inputs or []
             params_with_context = param_names + ["context=None"]
             func_str = f"def execute_dag({', '.join(params_with_context)}):\n"
             if param_names:
@@ -58,11 +62,13 @@ class DAGNode(Node):
     # Run the DAG with mapped kwargs
     result = dag.run(context=context, **dag_kwargs)
 
-    # Handle output mapping
-    if "output_mapping" in metadata and outputs:
-        # For now, assume single output
-        if len(outputs) == 1:
-            return result
+    # Store the nested context in the parent context if available
+    if context and hasattr(dag, 'context') and dag.context and 'node_name' in metadata:
+        # Store nested results under the node name for dot notation access
+        node_name = metadata['node_name']
+        context.metadata[f"_nested_{node_name}_context"] = dag.context
+
+    # Return just the final result
     return result
 """
 
@@ -73,6 +79,10 @@ class DAGNode(Node):
 
         # Set the function
         self.func = make_execute_function(dag, metadata, outputs)
+
+        # Ensure inputs is a list for consistency
+        if isinstance(self.inputs, dict):
+            self.inputs = list(self.inputs.keys())
 
         # Initialize parent class
         super().__post_init__()
@@ -102,7 +112,11 @@ class FSMNode(Node):
         # Create a function that captures these references
         def make_execute_function(fsm, metadata, outputs):
             # Build the function dynamically with the right signature
-            param_names = self.inputs or []
+            # Handle both list and dict inputs
+            if isinstance(self.inputs, dict):
+                param_names = list(self.inputs.keys())
+            else:
+                param_names = self.inputs or []
             params_with_context = param_names + ["context=None"]
             func_str = f"def execute_fsm({', '.join(params_with_context)}):\n"
             if param_names:
@@ -140,6 +154,10 @@ class FSMNode(Node):
 
         # Set the function
         self.func = make_execute_function(fsm, metadata, outputs)
+
+        # Ensure inputs is a list for consistency
+        if isinstance(self.inputs, dict):
+            self.inputs = list(self.inputs.keys())
 
         # Initialize parent class
         super().__post_init__()

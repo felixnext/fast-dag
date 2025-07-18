@@ -39,11 +39,12 @@ class VisualizationBackend(ABC):
         self.options = options or VisualizationOptions()
 
     @abstractmethod
-    def visualize_dag(self, dag: Any) -> str:
+    def visualize_dag(self, dag: Any, **kwargs) -> str:
         """Generate visualization for a DAG.
 
         Args:
             dag: The DAG instance to visualize
+            **kwargs: Additional options (e.g., context, options)
 
         Returns:
             String representation of the visualization
@@ -51,11 +52,12 @@ class VisualizationBackend(ABC):
         pass
 
     @abstractmethod
-    def visualize_fsm(self, fsm: Any) -> str:
+    def visualize_fsm(self, fsm: Any, **kwargs) -> str:
         """Generate visualization for an FSM.
 
         Args:
             fsm: The FSM instance to visualize
+            **kwargs: Additional options (e.g., context, options)
 
         Returns:
             String representation of the visualization

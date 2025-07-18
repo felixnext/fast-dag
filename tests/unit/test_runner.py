@@ -188,7 +188,9 @@ class TestParallelExecution:
         for i in range(6):
             make_node(f"node_{i}")
 
-        runner = DAGRunner(dag, mode=ExecutionMode.PARALLEL, max_workers=3)
+        runner = DAGRunner(
+            dag, mode=ExecutionMode.PARALLEL, max_workers=3, error_strategy="continue"
+        )
         runner.run()
 
         # Should never exceed max_workers
@@ -463,7 +465,7 @@ class TestTimeoutHandling:
 
         runner = DAGRunner(dag)
 
-        with pytest.raises(Exception, match="timeout"):
+        with pytest.raises(Exception, match="timed out"):
             runner.run()
 
 

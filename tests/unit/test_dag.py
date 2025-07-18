@@ -331,9 +331,15 @@ class TestDAGConnections:
         def target(text: str) -> str:
             return text
 
-        issues = dag.check_connection("source", "target")
-        assert len(issues) > 0
-        assert any("type" in issue.lower() for issue in issues)
+        # First connect the nodes
+        dag.connect("source", "target")
+
+        # Then check for connection issues
+        dag.check_connection_issues()
+        # With type checking in validation, we should get type mismatch issues
+        errors = dag.validate(check_types=True)
+        assert len(errors) > 0
+        assert any("type" in str(error).lower() for error in errors)
 
 
 class TestDAGProperties:

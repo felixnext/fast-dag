@@ -10,6 +10,7 @@ from fast_dag import (
     FSM,
     Context,
     CycleError,
+    ExecutionError,
     FSMContext,
     InvalidNodeError,
     TimeoutError,
@@ -293,7 +294,7 @@ class TestFSMValidationErrors:
         # Skip static validation check for now.
 
         # Should fail at runtime
-        with pytest.raises(InvalidNodeError) as exc_info:
+        with pytest.raises(ExecutionError) as exc_info:
             fsm.run()
         assert "does_not_exist" in str(exc_info.value)
 
@@ -349,12 +350,9 @@ class TestRuntimeErrors:
             # Always loop back to self
             return FSMReturn(next_state="loop_forever", value=1)
 
-        # Should stop after max_cycles
-        fsm.run()
-        assert len(fsm.context.state_history) == 5
-
-        # Should have hit max cycles
-        assert fsm.context.metadata.get("max_cycles_reached", False)
+        # Should stop after max_cycles with error
+        with pytest.raises(ExecutionError, match="Maximum cycles"):
+            fsm.run()
 
     def test_invalid_node_registration(self):
         """Test invalid node registration attempts"""

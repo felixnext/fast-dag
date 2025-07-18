@@ -8,8 +8,14 @@ from .base import VisualizationBackend
 class GraphvizBackend(VisualizationBackend):
     """Graphviz visualization backend."""
 
-    def visualize_dag(self, dag: Any) -> str:
+    def visualize_dag(self, dag: Any, **kwargs) -> str:
         """Generate Graphviz DOT notation for a DAG."""
+        # Extract options if provided
+        if "options" in kwargs:
+            self.options = kwargs["options"]
+
+        # Extract context if provided
+        kwargs.get("context")
         lines = ["digraph DAG {"]
 
         # Set graph attributes
@@ -32,6 +38,10 @@ class GraphvizBackend(VisualizationBackend):
                 attrs.append("shape=trapezium")
             elif node.node_type in (NodeType.ANY, NodeType.ALL):
                 attrs.append("shape=ellipse")
+            elif node.node_type == NodeType.DAG:
+                attrs.append("shape=box3d")  # 3D box for nested DAG
+            elif node.node_type == NodeType.FSM:
+                attrs.append("shape=doublecircle")  # Double circle for FSM
             else:
                 attrs.append("shape=box")
 
@@ -74,8 +84,14 @@ class GraphvizBackend(VisualizationBackend):
         lines.append("}")
         return "\n".join(lines)
 
-    def visualize_fsm(self, fsm: Any) -> str:
+    def visualize_fsm(self, fsm: Any, **kwargs) -> str:
         """Generate Graphviz DOT notation for an FSM."""
+        # Extract options if provided
+        if "options" in kwargs:
+            self.options = kwargs["options"]
+
+        # Extract context if provided
+        kwargs.get("context")
         lines = ["digraph FSM {"]
 
         # Set graph attributes
@@ -176,7 +192,7 @@ class GraphvizBackend(VisualizationBackend):
             except (subprocess.CalledProcessError, FileNotFoundError):
                 # Try using the graphviz Python package
                 try:
-                    import graphviz
+                    import graphviz  # type: ignore[import-untyped]
 
                     graph = graphviz.Source(content)
                     graph.render(filename, format=format, cleanup=True)

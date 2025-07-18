@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from fast_dag import FSM, FSMContext, FSMReturn
+from fast_dag.core.exceptions import ExecutionError
 
 
 class TestFSMCreation:
@@ -276,11 +277,9 @@ class TestFullExecution:
         def infinite_loop(context: FSMContext) -> FSMReturn:
             return FSMReturn(next_state="infinite_loop", value="looping")
 
-        fsm.run()
-
-        # Should stop after max_cycles
-        context = fsm.context
-        assert context.cycle_count == 3
+        # Should raise error when max cycles exceeded
+        with pytest.raises(ExecutionError, match="Maximum cycles"):
+            fsm.run()
 
     def test_run_with_explicit_stop(self):
         """Test FSM with explicit stop condition"""

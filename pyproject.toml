@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fast-dag"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "A lightweight, high-performance Python library for building and executing DAG (Directed Acyclic Graph) and FSM (Finite State Machine) workflows"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -15,22 +15,48 @@ authors = [
 maintainers = [
     {name = "Felix Geilert"},
 ]
-url = "https://github.com/felixnext/fast-dag"
-keywords = ["dag", "workflow", "workflow-engine"]
+keywords = [
+    "dag", 
+    "workflow", 
+    "workflow-engine",
+    "finite-state-machine",
+    "fsm",
+    "orchestration",
+    "pipeline",
+    "data-pipeline",
+    "task-graph",
+    "directed-acyclic-graph",
+    "asyncio",
+    "parallel-processing",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+    "Framework :: AsyncIO",
+    "Natural Language :: English",
 ]
 
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/felixnext/fast-dag"
+Repository = "https://github.com/felixnext/fast-dag"
+"Bug Tracker" = "https://github.com/felixnext/fast-dag/issues"
+Changelog = "https://github.com/felixnext/fast-dag/releases"
 
 [project.optional-dependencies]
 dev = [
@@ -139,4 +165,5 @@ packages = ["fast_dag"]
 dev = [
     "build>=1.2.2.post1",
     "twine>=6.1.0",
+    "types-pyyaml>=6.0.12.20250516",
 ]

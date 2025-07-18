@@ -165,7 +165,7 @@ def create_builder_dag() -> DAG:
 
     # Use builder pattern with method chaining
     dag = (
-        dag.add_node("fetch", fetch_data)
+        dag.add_node("fetch", fetch_data)  # type: ignore[assignment]
         .add_node("filter", filter_data)
         .add_node("aggregate", aggregate_results)
         .add_node(

@@ -3,7 +3,7 @@
 Copyright (c) 2025 Felix Geilert
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .core import (
     ConditionalReturn,

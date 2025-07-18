@@ -14,6 +14,8 @@ class NodeType(Enum):
     FSM_STATE = "fsm_state"
     ANY = "any"
     ALL = "all"
+    DAG = "dag"
+    FSM = "fsm"
 
 
 @dataclass

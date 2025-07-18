@@ -8,8 +8,14 @@ from .base import VisualizationBackend
 class MermaidBackend(VisualizationBackend):
     """Mermaid diagram visualization backend."""
 
-    def visualize_dag(self, dag: Any) -> str:
+    def visualize_dag(self, dag: Any, **kwargs) -> str:
         """Generate Mermaid diagram for a DAG."""
+        # Extract options if provided
+        if "options" in kwargs:
+            self.options = kwargs["options"]
+
+        # Extract context if provided
+        context = kwargs.get("context")
         lines = ["graph " + self.options.direction]
 
         # Get node types for special rendering
@@ -27,12 +33,18 @@ class MermaidBackend(VisualizationBackend):
                 lines.append(f"    {node_id}[/{label}/]")  # Trapezoid shape
             elif node.node_type in (NodeType.ANY, NodeType.ALL):
                 lines.append(f"    {node_id}(({label}))")  # Circle shape
+            elif node.node_type == NodeType.DAG:
+                lines.append(
+                    f"    {node_id}[[{label}]]"
+                )  # Subroutine shape (double rectangle)
+            elif node.node_type == NodeType.FSM:
+                lines.append(f"    {node_id}[({label})]")  # Stadium shape
             else:
                 lines.append(f"    {node_id}[{label}]")  # Rectangle shape
 
             # Add styling if needed
-            if dag.context and self.options.show_results:
-                style = self._get_mermaid_style(node, dag.context)
+            if context and self.options.show_results:
+                style = self._get_mermaid_style(node, context)
                 if style:
                     lines.append(f"    {style}")
 
@@ -54,8 +66,14 @@ class MermaidBackend(VisualizationBackend):
 
         return "\n".join(lines)
 
-    def visualize_fsm(self, fsm: Any) -> str:
+    def visualize_fsm(self, fsm: Any, **kwargs) -> str:
         """Generate Mermaid state diagram for an FSM."""
+        # Extract options if provided
+        if "options" in kwargs:
+            self.options = kwargs["options"]
+
+        # Extract context if provided
+        kwargs.get("context")
         lines = ["stateDiagram-v2"]
 
         # Add states

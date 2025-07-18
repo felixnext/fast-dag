@@ -144,9 +144,10 @@ class TestResultAccess:
             return 1
 
         @dag.node
-        def b() -> int:
-            return 2
+        def b(x: int) -> int:
+            return x + 1
 
+        dag.connect("a", "b")
         dag.run()
 
         results = dag.results

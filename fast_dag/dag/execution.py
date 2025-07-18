@@ -452,7 +452,7 @@ class DAGExecutor:
             New DAG instance with same structure
         """
         # Import here to avoid circular imports
-        from .core import DAG
+        from . import DAG
 
         new_dag = DAG(
             name=f"{self.name}_clone",
@@ -474,15 +474,13 @@ class DAGExecutor:
                 timeout=node.timeout,
                 metadata=node.metadata.copy(),
             )
-            # Import here to avoid circular imports at module level
-            from .core import DAG as DAGClass
-
-            if isinstance(new_dag, DAGClass):
-                new_dag.add_node(new_node)
+            new_dag.add_node(new_node)
 
         # Copy connections
         for node_name, node in self.nodes.items():
             new_node = new_dag.nodes[node_name]
+
+            # Copy output connections
             for output, connections in node.output_connections.items():
                 new_connections = []
                 for target_node, input_name in connections:
@@ -490,4 +488,240 @@ class DAGExecutor:
                     new_connections.append((new_target, input_name))
                 new_node.output_connections[output] = new_connections
 
+            # Copy input connections
+            for input_name, (
+                source_node,
+                output_name,
+            ) in node.input_connections.items():
+                new_source = new_dag.nodes[source_node.name]
+                new_node.input_connections[input_name] = (new_source, output_name)
+
         return new_dag
+
+    def _can_execute_node(self, node: Node, node_name: str) -> bool:  # noqa: ARG002
+        """Check if a node can be executed based on its input dependencies."""
+        from ..core.types import NodeType
+
+        if node.node_type == NodeType.ANY:
+            # ANY nodes can execute if at least one input is available
+            # If there are no connections, they can execute (entry nodes)
+            if not node.input_connections and not node.multi_input_connections:
+                return True
+
+            # Check multi_input_connections first for ANY nodes
+            all_source_nodes = []
+            if node.multi_input_connections:
+                for connections in node.multi_input_connections.values():
+                    all_source_nodes.extend(connections)
+            else:
+                # Fallback to regular input_connections
+                all_source_nodes = list(node.input_connections.values())
+
+            if not all_source_nodes:
+                return True
+
+            # For ANY nodes, they can execute if at least one input is available
+            if self.context is None:
+                return False
+            for source_node, _ in all_source_nodes:
+                if source_node.name and source_node.name in self.context.results:
+                    return True
+            return False
+
+        elif node.node_type == NodeType.ALL:
+            # ALL nodes need all inputs to be available
+            # If there are no connections, they can execute (entry nodes)
+            if not node.input_connections and not node.multi_input_connections:
+                return True
+
+            # Check multi_input_connections first for ALL nodes
+            all_source_nodes = []
+            if node.multi_input_connections:
+                for connections in node.multi_input_connections.values():
+                    all_source_nodes.extend(connections)
+            else:
+                # Fallback to regular input_connections
+                all_source_nodes = list(node.input_connections.values())
+
+            if not all_source_nodes:
+                return True
+
+            # For ALL nodes, they need all inputs to be available
+            if self.context is None:
+                return False
+            for source_node, _ in all_source_nodes:
+                if (
+                    source_node.name is None
+                    or source_node.name not in self.context.results
+                ):
+                    return False
+            return True
+
+        else:
+            # Regular nodes and other types
+            # Check all regular inputs
+            if self.context is None:
+                return False
+            for source_node, _ in node.input_connections.values():
+                if (
+                    source_node.name is None
+                    or source_node.name not in self.context.results
+                ):
+                    return False
+
+            # If a node has no connections and is not an entry point, it cannot execute
+            if not node.input_connections and not node.multi_input_connections:
+                # Entry nodes have no input connections but should execute
+                return True
+
+            return True
+
+    def _prepare_node_inputs(
+        self,
+        node: Node,
+        node_name: str,
+        entry_nodes: list[str],
+        kwargs: dict[str, Any],
+        error_strategy: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Prepare inputs for node execution.
+
+        Returns:
+            tuple: (node_inputs, skip_node)
+        """
+        node_inputs = {}
+        skip_node = False
+
+        if node_name in entry_nodes:
+            # Entry node - get inputs from kwargs
+            for input_name in node.inputs or []:
+                if input_name in kwargs:
+                    node_inputs[input_name] = kwargs[input_name]
+        else:
+            # Non-entry node - get inputs from dependencies
+            from ..core.types import NodeType
+
+            if node.node_type in (NodeType.ANY, NodeType.ALL):
+                # For ANY/ALL nodes, collect inputs from multi_input_connections
+                collected_inputs = []
+                all_source_nodes = []
+
+                if node.multi_input_connections:
+                    for connections in node.multi_input_connections.values():
+                        all_source_nodes.extend(connections)
+                else:
+                    # Fallback to regular input_connections
+                    all_source_nodes = list(node.input_connections.values())
+
+                for source_node, output_name in all_source_nodes:
+                    if (
+                        self.context
+                        and source_node.name
+                        and source_node.name in self.context.results
+                    ):
+                        result = self.context.get_result(source_node.name)
+                        # Handle specific output selection
+                        if isinstance(result, dict) and output_name != "result":
+                            if output_name in result:
+                                collected_inputs.append(result[output_name])
+                            else:
+                                # Output not found in result dict
+                                if error_strategy == "raise":
+                                    raise ExecutionError(
+                                        f"Output '{output_name}' not found in result from node '{source_node.name}'"
+                                    )
+                                elif error_strategy == "skip":
+                                    skip_node = True
+                                    break
+                                else:  # continue
+                                    pass
+                        else:
+                            collected_inputs.append(result)
+
+                if node.node_type == NodeType.ANY and not collected_inputs:
+                    # ANY node with no available inputs should skip
+                    if error_strategy == "skip":
+                        skip_node = True
+                    else:
+                        node_inputs["inputs"] = []
+                elif node.node_type == NodeType.ALL and len(collected_inputs) < len(
+                    all_source_nodes
+                ):
+                    # ALL node with missing inputs should handle based on error strategy
+                    if error_strategy == "raise":
+                        missing = [
+                            sn.name
+                            for sn, _ in all_source_nodes
+                            if sn.name
+                            and self.context
+                            and sn.name not in self.context.results
+                        ]
+                        raise ExecutionError(
+                            f"ALL node '{node_name}' missing inputs from: {missing}"
+                        )
+                    elif error_strategy == "skip":
+                        skip_node = True
+                    else:  # continue
+                        node_inputs["inputs"] = collected_inputs
+                else:
+                    node_inputs["inputs"] = collected_inputs
+            else:
+                # Regular node - get inputs from connections
+                for input_name, (
+                    source_node,
+                    output_name,
+                ) in node.input_connections.items():
+                    if source_node.name and self.context:
+                        result = self.context.get_result(source_node.name)
+                        # Handle specific output selection
+                        if isinstance(result, dict) and output_name != "result":
+                            if output_name in result:
+                                node_inputs[input_name] = result[output_name]
+                            else:
+                                # Output not found in result dict
+                                if error_strategy == "raise":
+                                    raise ExecutionError(
+                                        f"Output '{output_name}' not found in result from node '{source_node.name}'"
+                                    )
+                                elif error_strategy == "skip":
+                                    skip_node = True
+                                    break
+                                else:  # continue
+                                    node_inputs[input_name] = None
+                        else:
+                            node_inputs[input_name] = result
+
+        # Add context if needed
+        if node.inputs and "context" in node.inputs:
+            node_inputs["context"] = self.context
+
+        return node_inputs, skip_node
+
+    def _get_parallel_groups(self) -> list[list[str]]:
+        """Get groups of nodes that can be executed in parallel."""
+        groups = []
+        remaining_nodes = set(self.nodes.keys())
+
+        while remaining_nodes:
+            # Find nodes that can execute now (dependencies satisfied)
+            ready_nodes = []
+            for node_name in remaining_nodes:
+                node = self.nodes[node_name]
+                dependencies_satisfied = True
+
+                for _input_name, (source_node, _) in node.input_connections.items():
+                    if source_node.name and source_node.name in remaining_nodes:
+                        dependencies_satisfied = False
+                        break
+
+                if dependencies_satisfied:
+                    ready_nodes.append(node_name)
+
+            if ready_nodes:
+                groups.append(ready_nodes)
+                remaining_nodes -= set(ready_nodes)
+            else:
+                # If no nodes are ready, we have a problem (cycle or missing deps)
+                break
+
+        return groups

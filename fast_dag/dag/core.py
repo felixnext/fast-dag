@@ -712,6 +712,110 @@ class DAG:
 
         return not has_cycle
 
+    def _types_compatible(
+        self, source_type: type | None, target_type: type | None
+    ) -> bool:
+        """Check if two types are compatible for connection."""
+        if source_type is None or target_type is None:
+            return True  # No type information, assume compatible
+
+        # Handle exact type matches
+        if source_type == target_type:
+            return True
+
+        # Handle basic type hierarchy
+        try:
+            # Check if source_type is a subclass of target_type
+            if isinstance(source_type, type) and isinstance(target_type, type):
+                return issubclass(source_type, target_type)
+        except TypeError:
+            pass
+
+        # Handle union types and other complex types
+        if hasattr(target_type, "__origin__"):
+            # Check for Union types (including the | syntax)
+            import typing
+            from types import UnionType
+
+            # Handle both old-style Union and new-style | unions
+            if target_type.__origin__ is typing.Union:
+                return source_type in getattr(target_type, "__args__", [])
+
+        # Check for new-style union (Python 3.10+)
+        try:
+            from types import UnionType
+
+            if isinstance(target_type, UnionType):
+                return source_type in target_type.__args__
+        except ImportError:
+            pass
+
+        # For now, be conservative and return False for type mismatches
+        return False
+
+    def check_connection(
+        self,
+        source: str,
+        target: str,
+        output: str | None = None,
+        input: str | None = None,
+    ) -> list[str]:
+        """Check connection between nodes and return list of issues."""
+        issues = []
+
+        # Check that nodes exist
+        if source not in self.nodes:
+            issues.append(f"Source node '{source}' does not exist")
+        if target not in self.nodes:
+            issues.append(f"Target node '{target}' does not exist")
+
+        if issues:
+            return issues
+
+        source_node = self.nodes[source]
+        target_node = self.nodes[target]
+
+        # Get the actual output and input names
+        if output is None:
+            output = source_node.outputs[0] if source_node.outputs else "result"
+        if input is None:
+            input = target_node.inputs[0] if target_node.inputs else "data"
+
+        # Check if output exists
+        if source_node.outputs and output not in source_node.outputs:
+            issues.append(f"Source node '{source}' does not have output '{output}'")
+
+        # Check if input exists
+        if target_node.inputs and input not in target_node.inputs:
+            issues.append(f"Target node '{target}' does not have input '{input}'")
+
+        # Type checking
+        try:
+            from ..core.introspection import (
+                get_function_input_types,
+                get_function_return_type,
+            )
+
+            # Get the return type of the source output
+            source_return_type = get_function_return_type(source_node.func)
+
+            # Get the input types of the target
+            target_input_types = get_function_input_types(target_node.func)
+
+            # Check type compatibility
+            if input in target_input_types:
+                expected_type = target_input_types[input]
+                if not self._types_compatible(source_return_type, expected_type):
+                    issues.append(
+                        f"Type mismatch: source output '{output}' has type '{source_return_type}' "
+                        f"but target input '{input}' expects type '{expected_type}'"
+                    )
+        except Exception:
+            # If type checking fails, don't add issues
+            pass
+
+        return issues
+
     def check_connection_issues(self) -> list[str]:
         """Check for connection issues in the DAG.
 

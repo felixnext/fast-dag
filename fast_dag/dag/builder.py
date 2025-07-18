@@ -427,39 +427,6 @@ class DAGBuilder:
             func, name=name, inputs=inputs, outputs=outputs, description=description
         )
 
-    def set_node_hooks(
-        self,
-        node_name: str,
-        *,
-        pre_execute: Callable[[Any, dict[str, Any]], None] | None = None,
-        post_execute: Callable[[Any, dict[str, Any], Any], Any] | None = None,
-        on_error: Callable[[Any, dict[str, Any], Exception], None] | None = None,
-    ) -> None:
-        """Set lifecycle hooks for a specific node.
-
-        Args:
-            node_name: Name of the node
-            pre_execute: Hook called before node execution
-            post_execute: Hook called after node execution (can modify result)
-            on_error: Hook called when node execution fails
-
-        Returns:
-            Self for chaining
-        """
-        if node_name not in self.nodes:
-            raise ValueError(f"Node '{node_name}' not found")
-
-        node = self.nodes[node_name]
-
-        if pre_execute is not None:
-            node.pre_execute = pre_execute
-
-        if post_execute is not None:
-            node.post_execute = post_execute
-
-        if on_error is not None:
-            node.on_error = on_error
-
     def cached_node(
         self,
         func: Callable | None = None,
